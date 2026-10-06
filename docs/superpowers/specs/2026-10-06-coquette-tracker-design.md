@@ -54,7 +54,9 @@ Normative. These live in `src/domain/` as pure functions and are the primary tes
 
 ### 4.1 Time
 
-All day boundaries are computed in the user's stored IANA timezone via `date-fns-tz`, never in UTC and never in the browser's ambient zone. A "day" is a local calendar date (`YYYY-MM-DD`). Weeks are ISO weeks beginning Monday, per French convention.
+A "day" is a local calendar date (`YYYY-MM-DD`). Weeks are ISO weeks beginning Monday, per French convention.
+
+Exactly one function converts an instant into a local date: `todayIn(tz)`, built on `Intl.DateTimeFormat` with the user's stored IANA timezone — never UTC, never the browser's ambient zone. Every other date operation is pure calendar arithmetic over `YYYY-MM-DD` strings, parsed at **UTC noon** so no shift can cross a date boundary. Timezones and DST therefore cannot reach the rest of the domain layer, which is why no date library is required.
 
 **European DST ends on Sunday 25 October 2026**, inside the goal window. That date gets explicit test cases in streak continuity and in reminder dispatch.
 
@@ -226,7 +228,15 @@ This pairing replaced Cormorant + Nunito after rendering five candidates on the 
 
 **Motion.** Framer Motion. Spring on tick; a one-time shower of small bows and hearts on a completed day; a slow shimmer on the streak number. Everything behind `prefers-reduced-motion`, degrading to crossfades.
 
-**Charts are hand-built in SVG, not library defaults.** A thin rose rolling-average line, the trajectory dashed in plum at 40% opacity, raw weigh-ins as small open circles, no gridlines except a hairline at each weekly target. A default chart theme would undo the entire aesthetic in one screen. Legible in both themes.
+**Charts are hand-built in SVG, not library defaults** — a default chart theme would undo the entire aesthetic in one screen.
+
+**Colour carries no meaning in any chart.** This is forced, not stylistic: the palette is deliberately monochromatic, and running the categorical-palette validator over it shows cerise and muted plum separating by ΔE 0.6 under protanopia and only 7.6 with normal vision, against a floor of 15. No pair of pinks can encode identity, and no re-stepping fixes it without leaving the palette. Identity is therefore carried entirely by **mark type**, with every mark in one hue family:
+
+- **Raw weigh-ins** — small hollow circles, cerise stroke on a surface-coloured fill.
+- **7-day rolling average** — 2px solid cerise line. Same entity as the dots, so deliberately the same colour.
+- **Target trajectory** — 2px dashed line in muted ink. A *reference line*, not a series: recessive by design, direct-labelled at its right end.
+
+Consequences that are requirements, not polish: no legend box (a single series is named by its title, and the reference line is direct-labelled); no gridlines except a hairline at each weekly target; every chart carries a "voir les chiffres" table view so values can be read without interpreting any mark; and a pointer/touch crosshair reports the date and value under the finger. **Never a dual-axis chart** — pace and weekly distance are two separate single-series charts, never two y-scales on one.
 
 **Layout.** Mobile-first single column; bottom tab bar — Aujourd'hui / Poids / Calories / Course / Moi — safe-area aware; the countdown as a small persistent pill in the header. All copy French, tutoiement, warm without being saccharine.
 
@@ -238,7 +248,9 @@ Tests go where the rules are.
 
 **Sync engine against a fake server:** offline writes replay in order; last-write-wins in both directions; tombstones propagate; a mid-flight failure loses nothing; a skewed client clock never drops a row.
 
-**Playwright, three flows only:** onboarding through first tick; offline tick → reconnect → synced; install → push enabled. No coverage targets.
+**Playwright, two flows only:** onboarding through first tick, and offline tick → reconnect → synced. Both run against the built app with `/api/*` routed to an in-page fake server, so they need no database and no deployment.
+
+A third flow — install → push enabled — is deliberately **not** automated: Playwright cannot add a PWA to an iOS home screen, and on iOS push is impossible until it is there. An automated version would pass while proving nothing about the riskiest part of the project, so that flow is verified by hand on the real device. No coverage targets.
 
 ## 12. Risks
 
