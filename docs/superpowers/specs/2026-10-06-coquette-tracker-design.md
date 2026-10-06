@@ -31,6 +31,7 @@ These were settled during brainstorming. They are not open for re-litigation dur
 | Joker | Manual, usable on today or yesterday only, one per ISO week, day stays visibly marked | Rejected: automatic spending, and invisible marking |
 | End of cycle | On `goal_date + 1`, archive the cycle with a summary and prompt for a new goal | |
 | Aesthetic | Pink coquette, designer's discretion, reviewed early against a real screen | "mplus" in the original brief was a typo and carries no meaning |
+| Typography | Cormorant Garamond (display) + Jost (UI, body, labels); Caveat sparingly | Chosen over Cormorant + Nunito from rendered specimens of five candidates; see §10 |
 | UI language | French, tutoiement | |
 
 ## 3. Scope
@@ -217,7 +218,9 @@ Phase 1 reminders: *pas de dîner ce soir* on no-dinner evenings; an evening nud
 
 **Palette.** Coquette is dustier and warmer than candy pink, which is the trap that makes this genre read as a toy. Blush paper ground `#F7E3E6`, cream card surfaces `#FFFBF7`, rose primary `#E89BB0`, cerise `#C2567A` for emphasis, and — the decision that carries the most weight — body text in deep plum-brown `#6E2B45` rather than black. A dark theme in plum-black with the roses raised in chroma, because the checklist gets ticked at 23h in bed. Both themes are first-class.
 
-**Type.** Cormorant Garamond for display: the weight number, the streak count, the countdown. A high-contrast serif at size is what makes an interface read as composed rather than cute. Nunito for UI and body — soft and rounded without being childish. Caveat for handwritten notes, used perhaps three times in the entire app.
+**Type.** Cormorant Garamond for display — the weight number, the streak count, the countdown — because a high-contrast serif at size reads as composed rather than cute. **Jost** for UI, body and labels: a geometric sans whose circular forms contrast with the serif instead of echoing it, and whose letterspaced small caps carry the uppercase labels. Caveat for handwritten notes, used perhaps three times in the entire app.
+
+This pairing replaced Cormorant + Nunito after rendering five candidates on the real home screen. Nunito's rounded softness *agrees* with Cormorant rather than counterbalancing it, and two gentle voices read young rather than considered. Also rejected, with reasons, so they need not be revisited: **Bodoni Moda** (the most beautiful numerals of the five, but its hairlines fail at small sizes and in dark mode, so it could only ever be the big-number face); **Italiana** (a single weight, therefore no heading hierarchy anywhere); **Lora** as a body face (a serif on form labels and small numerals is lovely to read and tiring to use quickly).
 
 **Signature.** A ticked box ties a bow: the checked state is a small SVG ribbon that springs in, not a checkmark. It costs nothing and it is the interaction felt five times a day. Around it: faint paper grain, generous radii, hairline rose borders, and a scalloped lace edge on the Today card — one motif, used once, so it reads as intentional rather than decorated.
 
