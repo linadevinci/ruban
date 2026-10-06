@@ -64,7 +64,7 @@ Each day generates only the items that apply to it, derived from that week's `we
 | Item | Appears when | Satisfied when |
 |---|---|---|
 | `course` | the date is a planned run day | a run is logged for that date (auto-ticks), or ticked manually |
-| `calories` | always | the day's logged intake ≤ that day's allowance (auto-ticks), or ticked manually when nothing was logged |
+| `calories` | always | auto-ticks once entries exist and the day's total ≤ its allowance; auto-unticks if the total passes it. A manual override is always permitted in either direction — this is a self-report system, not an audit |
 | `no_dinner` | the date is marked no-dinner | ticked manually |
 | `steps` | always | logged steps ≥ `step_target` |
 | `water` | always | logged glasses ≥ `water_target` |
@@ -102,6 +102,7 @@ Two tiers. Per tick: a spring animation and an optional sound (default off — t
 
 ### 4.6 Weight
 
+- `start_date` defaults to the onboarding date and stays editable in settings. It anchors both the trajectory and the earliest date the streak can reach.
 - Cadence is `daily` or `weekly`, a user setting; it affects prompting only, never storage.
 - **Target trajectory** is the straight line from `(start_date, start_weight)` to `(goal_date, target_weight)`.
 - **This week's intermediate goal** is the trajectory's value on that ISO week's Sunday.
@@ -119,6 +120,8 @@ weekly_budget    = Σ allowance(day) for the 7 days of the ISO week
 weekly_remaining = weekly_budget − Σ kcal of the week's calorie_entries
 ```
 
+A plain daily total is stored as a single unlabelled `calorie_entries` row, so the two logging styles share one code path and can be mixed within a week.
+
 Toggling a no-dinner evening therefore moves the **weekly total**; the other days stay at `daily_target`.
 
 `calorie_floor` is a settings-level guard: if `daily_target` or `no_dinner_allowance` falls below it, settings says so plainly. A negative `weekly_remaining` is displayed as an overshoot, not hidden.
@@ -127,7 +130,7 @@ Each `week_plan` is its own snapshot keyed by ISO week, so editing next week's e
 
 ### 4.8 Running
 
-Logged as date, distance (km) and duration (seconds); pace is derived (`duration_s / distance_km`, rendered mm:ss/km) and never stored. The weekly gauge counts runs in the ISO week against a target of 5, alongside total km and the 5–7 km per-session range. Progression charts show pace over time and weekly km.
+Logged as date, distance (km) and duration (seconds); pace is derived (`duration_s / distance_km`, rendered mm:ss/km) and never stored. The weekly gauge counts runs in the ISO week against `settings.run_sessions_target` (default 5), alongside total km and the 5–7 km per-session range. Progression charts show pace over time and weekly km.
 
 ### 4.9 End of cycle
 
