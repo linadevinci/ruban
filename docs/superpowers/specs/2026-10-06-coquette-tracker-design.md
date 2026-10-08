@@ -141,7 +141,9 @@ From `goal_date + 1`, the app presents a cycle summary — weight delta, run cou
 
 ## 5. Data model
 
-Nine tables in Phase 1, mirrored between Dexie and Postgres. Every synced row carries a client-generated **UUIDv7** `id` (time-sortable, collision-free without a server round trip), an `updated_at`, and a `deleted_at` tombstone. **Nothing is ever hard-deleted** — a hard delete racing a pending sync resurrects the row.
+Ten tables in Phase 1, mirrored between Dexie and Postgres. Every synced row carries a client-generated **UUIDv7** `id` (time-sortable, collision-free without a server round trip), an `updated_at`, and a `deleted_at` tombstone. **Nothing is ever hard-deleted** — a hard delete racing a pending sync resurrects the row.
+
+**`settings` is the one exception, deliberately.** It is a per-user singleton keyed by `user_id`, so it carries no separate `id` — the user id *is* the key — and no `deleted_at`, because deleting your settings is deleting your account, not an operation the app offers. Every layer that walks the synced tables therefore branches on it: the Dexie table is keyed `userId`, the sync engine and the sync endpoint pick the key per table, and `softDelete`'s type signature excludes `settings` outright. Do not “fix” this by giving `settings` an `id`; that breaks its primary key in Dexie and Postgres both.
 
 - `users` — id, username (unique), password_hash, recovery_code_hash, created_at
 - `settings` — user_id (pk), timezone, start_date, start_weight, target_weight, goal_date, weigh_in_cadence, daily_calorie_target, no_dinner_allowance, calorie_floor, step_target, water_target, run_sessions_target, sound_enabled, updated_at
@@ -150,6 +152,7 @@ Nine tables in Phase 1, mirrored between Dexie and Postgres. Every synced row ca
 - `calorie_entries` — id, user_id, date, label, kcal, updated_at, deleted_at
 - `runs` — id, user_id, date, distance_km, duration_s, note, updated_at, deleted_at
 - `week_plans` — id, user_id, iso_week (`2026-W41`), no_dinner_days (int[]), run_days (int[]), joker_used_on, updated_at. Unique on (user_id, iso_week)
+- `cycles` — id, user_id, start_date, goal_date, start_weight, target_weight, end_weight, closed_at, updated_at, deleted_at. One row per closed goal period. Required by §4.9: starting a new goal overwrites `settings.start_date`, so without this the finished cycle's own boundaries are lost. Only the boundaries are stored — every figure in the summary stays derived from the day logs, runs and weigh-ins.
 - `push_subscriptions` — id, user_id, endpoint, p256dh, auth, user_agent, created_at
 - `reminders` — id, user_id, kind, days_of_week (int[]), local_time, enabled, updated_at
 
