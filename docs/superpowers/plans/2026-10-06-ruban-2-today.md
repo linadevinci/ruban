@@ -2126,7 +2126,7 @@ createRoot(document.getElementById('root')!).render(
 Run: `npm test -- App`
 Expected: PASS.
 
-Run: `npm test && npx tsc --noEmit`
+Run: `npm test && npx tsc -b`
 Expected: everything PASS, no type errors.
 
 - [ ] **Step 5: Commit**
@@ -2174,7 +2174,7 @@ git commit -m "docs: record first-use feedback on the Today screen"
 
 ## Plan 2 Done When
 
-- `npm test` and `npx tsc --noEmit` are clean.
+- `npm test` and `npx tsc -b` are clean.
 - No component imports from `src/db/schema` directly — only through `src/db/repos` or a hook.
 - Verify no rule logic leaked into components: `grep -rE "(noDinnerDays|runDays)\.includes" src/features/` returns nothing.
 - Both themes render legibly, and `prefers-reduced-motion` replaces the bow shower with a pulse.

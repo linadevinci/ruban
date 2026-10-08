@@ -181,7 +181,13 @@ git commit -m "feat: add the shared last-write-wins rule and sync protocol"
 
 ```bash
 npm install drizzle-orm @neondatabase/serverless bcryptjs jose
-npm install -D drizzle-kit @vercel/node @types/bcryptjs
+npm install -D drizzle-kit @vercel/node
+```
+
+**Do not install `@types/bcryptjs`.** Verified on npm: it is published only as a deprecated stub ("bcryptjs provides its own type definitions, so you do not need this installed"), and bcryptjs 3 ships `umd/index.d.ts` itself.
+
+```bash
+# nothing further to install
 ```
 
 **Interfaces:**
@@ -437,6 +443,8 @@ git commit -m "feat: add Postgres schema on Neon with dual timestamps"
 The recovery alphabet excludes `0 O 1 I L` — this code gets written on paper and read back months later.
 
 Add to `vite.config.ts` `test.include`: `'api/**/*.test.ts'`.
+
+**Also extend `tsconfig.node.json`'s `include`** to `["vite.config.ts", "api/**/*.ts", "db/**/*.ts", "drizzle.config.ts"]`, and add `"strict": true` to its `compilerOptions`. As scaffolded it includes only `vite.config.ts` and is not strict, so `npx tsc -b` would never type-check a single serverless function — the same false-pass trap as `--noEmit`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -888,7 +896,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
 - [ ] **Step 4: Type-check**
 
-Run: `npx tsc --noEmit`
+Run: `npx tsc -b`
 Expected: no errors.
 
 - [ ] **Step 5: Commit**
@@ -999,7 +1007,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
 - [ ] **Step 2: Type-check**
 
-Run: `npx tsc --noEmit`
+Run: `npx tsc -b`
 Expected: no errors. If Drizzle's generic upsert types fight the dynamic table lookup, narrow with a `switch` over the six table names rather than widening to `any` — the cast must stay at the row level, never the table level.
 
 - [ ] **Step 3: Commit**
@@ -1576,7 +1584,7 @@ with `import { useEffect } from 'react';` and `import { httpTransport, syncOnce 
 
 - [ ] **Step 3: Run the full suite**
 
-Run: `npm test && npx tsc --noEmit`
+Run: `npm test && npx tsc -b`
 Expected: everything PASS.
 
 - [ ] **Step 4: Smoke-test against a real deployment**
@@ -1752,7 +1760,7 @@ git commit -m "test: add end-to-end onboarding and offline-sync flows"
 
 ## Plan 4 Done When
 
-- `npm test` and `npx tsc --noEmit` are clean.
+- `npm test` and `npx tsc -b` are clean.
 - The merge rule exists exactly once: `grep -rn "shouldApply" src/ api/ | wc -l` shows only the definition and its two call sites.
 - No serverless function reaches Dexie: `grep -rn "db/schema" api/` returns nothing.
 - Nothing `api/` imports uses the Vite alias: `grep -rn "from '@/" src/sync/ src/shared/ src/domain/` returns nothing.

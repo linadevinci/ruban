@@ -26,6 +26,9 @@ These apply to every task in every Ruban plan. Values are copied verbatim from t
 - **Palette:** ground `#F7E3E6`, surface `#FFFBF7`, inset `#FDF2F4`, rose `#E89BB0`, cerise `#C2567A`, ink `#6E2B45`, line `#EDCCD6`. Dark: ground `#1B0F15`, surface `#2A1821`, inset `#231420`, ink `#F7E5EA`, ink-soft `#C098AA`, rose `#EFA6BA`, cerise `#F57FA6`, line `#412833`. (Plan 2.)
 - **Type:** Cormorant Garamond (display), Jost (UI/body/labels), Caveat (sparingly). (Plan 2.)
 - **Commit after every task.** Conventional Commit prefixes (`feat:`, `test:`, `chore:`).
+- **Type-check with `npx tsc -b`, never `npx tsc --noEmit`.** The root `tsconfig.json` is references-only (`files: []`), so `--noEmit` type-checks *nothing* and exits 0 on real errors. Verified on this project: a deliberate `const x: number = "nope"` passed `--noEmit` and failed `tsc -b` with exit 2.
+- **Actual toolchain, confirmed at install time** (newer than this plan was written against): Vite 8, TypeScript 6, React 19.2, `@vitejs/plugin-react` 6, Vitest 5, Dexie 4.4, oxlint (no eslint). `compilerOptions` live in **`tsconfig.app.json`** — the root tsconfig has none.
+- **The template already sets `verbatimModuleSyntax`, `erasableSyntaxOnly`, `noUnusedLocals` and `noUnusedParameters`.** So: type-only imports must say `import type`; no enums or parameter properties; and an unused binding must be `_`-prefixed to be accepted in a destructuring pattern.
 
 ---
 
@@ -49,89 +52,33 @@ These apply to every task in every Ruban plan. Values are copied verbatim from t
 
 ---
 
-### Task 1: Project scaffold
+### Task 1: Project scaffold — **COMPLETE** (controller, commit e8fad6a)
 
-**Files:**
-- Create: `package.json`, `tsconfig.json`, `tsconfig.node.json`, `vite.config.ts`, `index.html`, `src/main.tsx`, `src/App.tsx`
-- Modify: `.gitignore` (already present)
+Executed by the controller as reconnaissance, not by a subagent, because it
+installs every dependency and so is the first chance to check the real APIs
+against what these plans assume. What it found is recorded in the Global
+Constraints above and in the ledger. Recorded here so the plan matches reality:
 
-**Interfaces:**
-- Consumes: nothing.
-- Produces: `npm test` runs Vitest; `npm run dev` serves the app; `@/` resolves to `src/`.
+**Done:**
+- Scaffolded `npm create vite@latest ruban -- --template react-ts` **into the
+  scratchpad first**, then copied the files in. The in-place form prompts about
+  the non-empty directory and one of its options removes existing files — not
+  worth pointing at a directory holding `.git` and `docs/`.
+- `npm install` plus `dexie uuidv7` and dev `vitest @vitest/coverage-v8 jsdom
+  fake-indexeddb`.
+- `vite.config.ts` rewritten: `defineConfig` from **`vitest/config`** (the one
+  from `vite` rejects the `test` key), the `@` alias, and
+  `test: { environment: 'node', include: ['src/**/*.test.ts', 'src/**/*.test.tsx'] }`.
+- `tsconfig.app.json` — **not** `tsconfig.json` — gained `strict: true`,
+  `noUncheckedIndexedAccess: true` and `paths: { "@/*": ["./src/*"] }`. The
+  leading `./` is required: without `baseUrl`, a bare `src/*` fails with TS5090.
+- `package.json`: `name: "ruban"`, scripts `test` and `test:watch`.
+- Verified the alias resolves in **both** toolchains (a temporary module imported
+  through `@/`, then deleted), `npm test` green, `npx tsc -b` exit 0.
 
-- [ ] **Step 1: Scaffold and install**
-
-```bash
-cd /home/linoux/site-sport
-npm create vite@latest . -- --template react-ts
-npm install
-npm install dexie uuidv7
-npm install -D vitest @vitest/coverage-v8 jsdom
-```
-
-If `npm create vite` refuses because the directory is not empty, answer "Ignore files and continue". It will not touch `docs/` or `.git/`.
-
-- [ ] **Step 2: Add the test script and path alias**
-
-In `package.json`, add to `"scripts"`:
-
-```json
-"test": "vitest run",
-"test:watch": "vitest"
-```
-
-Replace `vite.config.ts` with:
-
-```ts
-import { defineConfig } from 'vitest/config';
-import react from '@vitejs/plugin-react';
-import { fileURLToPath, URL } from 'node:url';
-
-export default defineConfig({
-  plugins: [react()],
-  resolve: {
-    alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) },
-  },
-  test: {
-    environment: 'node',
-    include: ['src/**/*.test.ts', 'src/**/*.test.tsx'],
-  },
-});
-```
-
-In `tsconfig.json`, inside `compilerOptions`, add:
-
-```json
-"baseUrl": ".",
-"paths": { "@/*": ["src/*"] },
-"strict": true,
-"noUncheckedIndexedAccess": true
-```
-
-- [ ] **Step 3: Verify the toolchain runs**
-
-Create `src/domain/smoke.test.ts`:
-
-```ts
-import { describe, expect, it } from 'vitest';
-
-describe('toolchain', () => {
-  it('runs tests', () => {
-    expect(1 + 1).toBe(2);
-  });
-});
-```
-
-Run: `npm test`
-Expected: PASS, 1 test.
-
-- [ ] **Step 4: Delete the smoke test and commit**
-
-```bash
-rm src/domain/smoke.test.ts
-git add -A
-git commit -m "chore: scaffold Vite + React + TS + Vitest"
-```
+**Deliberately not done:** the template's `src/App.tsx`, `src/App.css`,
+`src/index.css`, `src/assets/` and `public/*` are still in place. Plan 2 Task 1
+deletes the stylesheets and Task 11 deletes `App.tsx`.
 
 ---
 
@@ -259,7 +206,7 @@ export type SyncedTableName = (typeof SYNCED_TABLES)[number];
 
 - [ ] **Step 2: Verify it compiles**
 
-Run: `npx tsc --noEmit`
+Run: `npx tsc -b`
 Expected: no errors.
 
 - [ ] **Step 3: Commit**
@@ -2222,7 +2169,7 @@ Expected: PASS.
 
 - [ ] **Step 5: Run the whole suite and commit**
 
-Run: `npm test && npx tsc --noEmit`
+Run: `npm test && npx tsc -b`
 Expected: all tests PASS, no type errors.
 
 ```bash
@@ -2235,7 +2182,7 @@ git commit -m "feat: add repositories that stamp updatedAt and enqueue sync"
 ## Plan 1 Done When
 
 - `npm test` passes with coverage of every rule in spec §4.
-- `npx tsc --noEmit` is clean.
+- `npx tsc -b` is clean.
 - `src/domain/` imports nothing from `src/db/`, React, or any date library. Verify: `grep -rE "from '(dexie|react|date-fns)" src/domain/` returns nothing.
 - `src/domain/` and `src/shared/` use no `@/` alias, so `api/` can import them. Verify: `grep -rn "from '@/" src/domain/ src/shared/` returns nothing.
 - Every mutating repo call produces exactly one outbox row.

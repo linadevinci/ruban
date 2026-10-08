@@ -2114,7 +2114,7 @@ import { Weight } from '@/features/weight/Weight';
 
 - [ ] **Step 4: Run the full suite**
 
-Run: `npm test && npx tsc --noEmit`
+Run: `npm test && npx tsc -b`
 Expected: everything PASS, no type errors.
 
 - [ ] **Step 5: Commit**
@@ -2547,7 +2547,7 @@ and return `<div className="app"><CycleComplete userId={userId} settings={settin
 
 - [ ] **Step 6: Run the tests and commit**
 
-Run: `npm test && npx tsc --noEmit`
+Run: `npm test && npx tsc -b`
 Expected: all PASS.
 
 ```bash
@@ -2559,7 +2559,7 @@ git commit -m "feat: archive a finished cycle and prompt for the next goal"
 
 ## Plan 3 Done When
 
-- `npm test` and `npx tsc --noEmit` are clean.
+- `npm test` and `npx tsc -b` are clean.
 - No chart uses two y-scales. Verify by inspection: each `<Chart>` has exactly one `yFormat`.
 - No chart distinguishes series by colour alone. Verify: `grep -rE "var\(--rose\)" src/ui/marks.tsx` returns nothing — marks use `--cerise` for data and `--ink-soft` for the reference line only.
 - Every chart has a working "Voir les chiffres" table.

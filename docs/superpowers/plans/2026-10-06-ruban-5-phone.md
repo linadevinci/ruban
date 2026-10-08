@@ -48,9 +48,12 @@ Plan 1's Global Constraints apply in full. Added here:
 - Create: `public/logo.svg`
 - Modify: `vite.config.ts`, `index.html`
 
+`vite-plugin-pwa` 2.x declares `vite ^8`, `workbox-build ^7.4.1`, `workbox-window ^7.4.1` and `@vite-pwa/assets-generator` as peers — verified compatible with this project's Vite 8, and the two workbox peers are why they are installed explicitly below.
+
 ```bash
 npm install -D vite-plugin-pwa @vite-pwa/assets-generator
 npm install workbox-precaching workbox-routing workbox-strategies
+npm install -D workbox-build workbox-window
 ```
 
 **Interfaces:**
@@ -148,12 +151,12 @@ git commit -m "feat: add PWA manifest and the bow icon set"
 
 **Files:**
 - Create: `src/sw.ts`
-- Modify: `src/main.tsx` (register), `tsconfig.json` (WebWorker lib)
+- Modify: `src/main.tsx` (register)
 
 **Interfaces:**
 - Produces: a service worker that precaches the shell, serves SPA navigations from cache, never caches `/api/*`, and handles `push` and `notificationclick`.
 
-Add to `tsconfig.json` `compilerOptions.lib`: `"WebWorker"` alongside the existing entries.
+**Do not add `"WebWorker"` to `compilerOptions.lib`.** It would have to go in `tsconfig.app.json` (the root tsconfig has no `compilerOptions`), and loading `DOM` and `WebWorker` together produces conflicting global declarations. The `/// <reference lib="webworker" />` at the top of `sw.ts`, plus its local `declare const self`, scopes the worker types to that one file — which is why the file is written that way.
 
 - [ ] **Step 1: Write the worker**
 
@@ -242,7 +245,7 @@ import { registerSW } from 'virtual:pwa-register';
 registerSW({ immediate: true });
 ```
 
-If TypeScript does not know `virtual:pwa-register`, add `"vite-plugin-pwa/client"` to `compilerOptions.types` in `tsconfig.json`.
+If TypeScript does not know `virtual:pwa-register`, **append** `"vite-plugin-pwa/client"` to `compilerOptions.types` in `tsconfig.app.json` — append, never replace: the array already holds `"vite/client"`, and dropping it breaks every `import.meta.env` reference.
 
 - [ ] **Step 3: Verify offline launch**
 
@@ -589,7 +592,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
 - [ ] **Step 5: Run the tests and commit**
 
-Run: `npm test -- pwa/push && npx tsc --noEmit`
+Run: `npm test -- pwa/push && npx tsc -b`
 Expected: PASS, no type errors.
 
 ```bash
@@ -945,7 +948,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
 - [ ] **Step 2: Type-check**
 
-Run: `npx tsc --noEmit`
+Run: `npx tsc -b`
 Expected: no errors.
 
 - [ ] **Step 3: Verify the guard rejects an unsigned call**
@@ -1148,7 +1151,7 @@ In `src/features/settings/Settings.tsx`, add `import { Notifications } from '@/f
 
 - [ ] **Step 3: Run the full suite**
 
-Run: `npm test && npx tsc --noEmit && npm run build`
+Run: `npm test && npx tsc -b && npm run build`
 Expected: all PASS, clean build.
 
 - [ ] **Step 4: Commit**
@@ -1204,7 +1207,7 @@ git commit -m "docs: record on-device PWA and push verification"
 
 ## Plan 5 Done When
 
-- `npm test`, `npx tsc --noEmit` and `npm run build` are all clean.
+- `npm test`, `npx tsc -b` and `npm run build` are all clean.
 - The installed app launches and works with no network.
 - `/api/*` is never served from cache: a sync attempt while offline fails rather than returning stale data.
 - `/api/cron/reminders` returns 401 without the secret header.
