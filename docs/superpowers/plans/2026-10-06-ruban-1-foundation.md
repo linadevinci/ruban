@@ -704,7 +704,9 @@ git commit -m "feat: add weight trajectory, weekly goal and countdown"
   - `export type BudgetPlan = Pick<WeekPlan, 'noDinnerDays'>`
   - `export type BudgetSettings = Pick<Settings, 'dailyCalorieTarget' | 'noDinnerAllowance' | 'calorieFloor'>`
 
-**Spec note for the implementer:** the user chose the model where the weekly total *falls* on no-dinner days. Each day's allowance is fixed; marking an evening moves the **weekly total**, and the other days stay at `dailyCalorieTarget`. Do not redistribute a surplus — that was the rejected alternative.
+**Spec note for the implementer:** the user chose the model where the weekly total *falls* on no-dinner days.
+
+**Corrected arithmetic note.** An earlier draft of this task expected `weeklyRemaining` to be 1800 and −300 against consumed values of 6900 and 9000. Those came from computing the budget as `7 x 1500 − 2 x 900 = 8700` — subtracting the whole no-dinner allowance twice instead of the 600 difference. The budget is `5 x 1500 + 2 x 900 = 9300`, so the right expectations are 2400, and −300 against a consumed value of 9600 (which preserves that test's intent of an actual overshoot). Prefer symbolic expressions like `5 * 1500 + 2 * 900 - consumed` over hardcoded totals in future tests: the other plans write it that way and are self-checking as a result. Each day's allowance is fixed; marking an evening moves the **weekly total**, and the other days stay at `dailyCalorieTarget`. Do not redistribute a surplus — that was the rejected alternative.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -766,12 +768,15 @@ describe('weeklyBudget', () => {
 });
 
 describe('weeklyRemaining', () => {
+  // The week's budget is 5 x 1500 + 2 x 900 = 9300. Expectations below are
+  // written against that figure; see the note under this task on why an
+  // earlier draft used 8700.
   it('subtracts what was logged', () => {
-    expect(weeklyRemaining('2026-W41', defaultPlan, settings, 6900)).toBe(1800);
+    expect(weeklyRemaining('2026-W41', defaultPlan, settings, 6900)).toBe(2400);
   });
 
   it('goes negative on an overshoot instead of clamping', () => {
-    expect(weeklyRemaining('2026-W41', defaultPlan, settings, 9000)).toBe(-300);
+    expect(weeklyRemaining('2026-W41', defaultPlan, settings, 9600)).toBe(-300);
   });
 });
 
@@ -1899,6 +1904,23 @@ describe('updateDayLog', () => {
     const after = await updateDayLog('u1', '2026-10-06', { ticks: { no_dinner: true } });
     expect(after.ticks).toEqual({ course: true, no_dinner: true });
   });
+
+  it('enqueues exactly one outbox row when the day did not exist yet', async () => {
+    await db.outbox.clear();
+    await updateDayLog('u1', '2026-10-09', { steps: 8000 });
+    // Two rows here would mean the create and the update ran as separate
+    // writes, which is the two-transaction shape this guards against.
+    expect(await db.outbox.count()).toBe(1);
+  });
+
+  it('keeps both ticks when two updates race', async () => {
+    await Promise.all([
+      updateDayLog('u1', '2026-10-10', { ticks: { course: true } }),
+      updateDayLog('u1', '2026-10-10', { ticks: { calories: true } }),
+    ]);
+    const log = await getOrCreateDayLog('u1', '2026-10-10');
+    expect(log.ticks).toEqual({ course: true, calories: true });
+  });
 });
 
 describe('saveCycle', () => {
@@ -2076,15 +2098,27 @@ export async function updateDayLog(
   date: IsoDate,
   patch: Partial<Omit<DayLog, 'id' | 'userId' | 'date'>>,
 ): Promise<DayLog> {
-  const current = await getOrCreateDayLog(userId, date);
-  const row: DayLog = {
-    ...current,
-    ...patch,
-    // ticks merge rather than replace, so one tap never clears another.
-    ticks: { ...current.ticks, ...(patch.ticks ?? {}) },
-    updatedAt: nowIso(),
-  };
+  let row!: DayLog;
+  // The read and the write share ONE transaction. Reading via
+  // getOrCreateDayLog first would open a second transaction, leaving a window
+  // in which two rapid taps both read the old ticks and the later write
+  // clobbers the earlier tick. It would also enqueue two outbox rows for a
+  // day that did not exist yet: one for the create, one for the update.
   await db.transaction('rw', db.dayLogs, db.outbox, async () => {
+    const existing = await db.dayLogs.where('[userId+date]').equals([userId, date]).first();
+    const base: DayLog = existing ?? {
+      id: newId(), userId, date, ticks: {}, steps: null, waterGlasses: null,
+      jokered: false, validatedAt: null, bonusFiredAt: null,
+      mood: null, energy: null, note: null,
+      updatedAt: nowIso(), deletedAt: null,
+    };
+    row = {
+      ...base,
+      ...patch,
+      // ticks merge rather than replace, so one tap never clears another.
+      ticks: { ...base.ticks, ...(patch.ticks ?? {}) },
+      updatedAt: nowIso(),
+    };
     await db.dayLogs.put(row);
     await enqueue('dayLogs', 'put', row);
   });
@@ -2117,9 +2151,18 @@ export async function updateWeekPlan(
   isoWeek: IsoWeek,
   patch: Partial<Pick<WeekPlan, 'runDays' | 'noDinnerDays' | 'jokerUsedOn'>>,
 ): Promise<WeekPlan> {
-  const current = await getOrCreateWeekPlan(userId, isoWeek);
-  const row: WeekPlan = { ...current, ...patch, updatedAt: nowIso() };
+  let row!: WeekPlan;
+  // One transaction, for the same reasons as updateDayLog above.
   await db.transaction('rw', db.weekPlans, db.outbox, async () => {
+    const existing = await db.weekPlans.where('[userId+isoWeek]').equals([userId, isoWeek]).first();
+    const base: WeekPlan = existing ?? {
+      id: newId(), userId, isoWeek,
+      runDays: [...DEFAULT_RUN_DAYS],
+      noDinnerDays: [...DEFAULT_NO_DINNER_DAYS],
+      jokerUsedOn: null,
+      updatedAt: nowIso(), deletedAt: null,
+    };
+    row = { ...base, ...patch, updatedAt: nowIso() };
     await db.weekPlans.put(row);
     await enqueue('weekPlans', 'put', row);
   });
