@@ -112,15 +112,27 @@ export async function updateDayLog(
   date: IsoDate,
   patch: Partial<Omit<DayLog, 'id' | 'userId' | 'date'>>,
 ): Promise<DayLog> {
-  const current = await getOrCreateDayLog(userId, date);
-  const row: DayLog = {
-    ...current,
-    ...patch,
-    // ticks merge rather than replace, so one tap never clears another.
-    ticks: { ...current.ticks, ...(patch.ticks ?? {}) },
-    updatedAt: nowIso(),
-  };
+  let row!: DayLog;
+  // The read and the write share ONE transaction. Reading via
+  // getOrCreateDayLog first would open a second transaction, leaving a window
+  // in which two rapid taps both read the old ticks and the later write
+  // clobbers the earlier tick. It would also enqueue two outbox rows for a
+  // day that did not exist yet: one for the create, one for the update.
   await db.transaction('rw', db.dayLogs, db.outbox, async () => {
+    const existing = await db.dayLogs.where('[userId+date]').equals([userId, date]).first();
+    const base: DayLog = existing ?? {
+      id: newId(), userId, date, ticks: {}, steps: null, waterGlasses: null,
+      jokered: false, validatedAt: null, bonusFiredAt: null,
+      mood: null, energy: null, note: null,
+      updatedAt: nowIso(), deletedAt: null,
+    };
+    row = {
+      ...base,
+      ...patch,
+      // ticks merge rather than replace, so one tap never clears another.
+      ticks: { ...base.ticks, ...(patch.ticks ?? {}) },
+      updatedAt: nowIso(),
+    };
     await db.dayLogs.put(row);
     await enqueue('dayLogs', 'put', row);
   });
@@ -153,9 +165,18 @@ export async function updateWeekPlan(
   isoWeek: IsoWeek,
   patch: Partial<Pick<WeekPlan, 'runDays' | 'noDinnerDays' | 'jokerUsedOn'>>,
 ): Promise<WeekPlan> {
-  const current = await getOrCreateWeekPlan(userId, isoWeek);
-  const row: WeekPlan = { ...current, ...patch, updatedAt: nowIso() };
+  let row!: WeekPlan;
+  // One transaction, for the same reasons as updateDayLog above.
   await db.transaction('rw', db.weekPlans, db.outbox, async () => {
+    const existing = await db.weekPlans.where('[userId+isoWeek]').equals([userId, isoWeek]).first();
+    const base: WeekPlan = existing ?? {
+      id: newId(), userId, isoWeek,
+      runDays: [...DEFAULT_RUN_DAYS],
+      noDinnerDays: [...DEFAULT_NO_DINNER_DAYS],
+      jokerUsedOn: null,
+      updatedAt: nowIso(), deletedAt: null,
+    };
+    row = { ...base, ...patch, updatedAt: nowIso() };
     await db.weekPlans.put(row);
     await enqueue('weekPlans', 'put', row);
   });

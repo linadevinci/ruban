@@ -90,6 +90,23 @@ describe('updateDayLog', () => {
     const after = await updateDayLog('u1', '2026-10-06', { ticks: { no_dinner: true } });
     expect(after.ticks).toEqual({ course: true, no_dinner: true });
   });
+
+  it('enqueues exactly one outbox row when the day did not exist yet', async () => {
+    await db.outbox.clear();
+    await updateDayLog('u1', '2026-10-09', { steps: 8000 });
+    // Two rows here would mean the create and the update ran as separate
+    // writes, which is the two-transaction shape this guards against.
+    expect(await db.outbox.count()).toBe(1);
+  });
+
+  it('keeps both ticks when two updates race', async () => {
+    await Promise.all([
+      updateDayLog('u1', '2026-10-10', { ticks: { course: true } }),
+      updateDayLog('u1', '2026-10-10', { ticks: { calories: true } }),
+    ]);
+    const log = await getOrCreateDayLog('u1', '2026-10-10');
+    expect(log.ticks).toEqual({ course: true, calories: true });
+  });
 });
 
 describe('saveCycle', () => {
