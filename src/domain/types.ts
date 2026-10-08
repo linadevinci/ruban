@@ -13,10 +13,18 @@ export type TickableItemId = 'course' | 'calories' | 'no_dinner';
 export interface SyncedRow {
   id: string;
   userId: string;
+  /** ISO 8601 instant (e.g., 2026-10-08T20:36:51.000Z). */
   updatedAt: string;
+  /** ISO 8601 instant or null if not deleted (e.g., 2026-10-08T20:36:51.000Z). */
   deletedAt: string | null;
 }
 
+/**
+ * Per-user singleton keyed by userId. Deliberately does not extend SyncedRow because the user id
+ * is the primary key and settings are never tombstoned—deleting settings means deleting the account,
+ * which the app does not offer. Adding an id field would break the primary key in both Dexie and
+ * Postgres, so Settings must not have id and deletedAt fields.
+ */
 export interface Settings {
   userId: string;
   timezone: string;
