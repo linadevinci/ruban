@@ -488,10 +488,12 @@ describe('rollingAverage', () => {
     expect(rollingAverage(data, '2026-10-06')).toBeCloseTo(62.5, 10);
   });
 
-  it('excludes weigh-ins older than seven days', () => {
+  it('excludes weigh-ins older than the seven-day window', () => {
+    // "Trailing seven calendar days inclusive" means {onDate-6 … onDate}, so a
+    // weigh-in exactly 7 days back is OUTSIDE the window, not on its edge.
     const data = [
-      w('2026-09-28', 70), // 8 days before — outside the window
-      w('2026-09-29', 63), // 7 days before — inside
+      w('2026-09-29', 70),   // 7 days before — outside
+      w('2026-09-30', 63),   // 6 days before — inside
       w('2026-10-05', 62.5),
       w('2026-10-06', 62),
     ];
@@ -628,8 +630,13 @@ describe('weeklyIntermediateGoal', () => {
 });
 
 describe('impliedWeeklyRate', () => {
-  it('reports kg per week so onboarding can show it', () => {
-    expect(impliedWeeklyRate(s)).toBeCloseTo((3.7 / 37) * 7, 10);
+  it('is signed, and negative when the target is below the start', () => {
+    expect(impliedWeeklyRate(s)).toBeCloseTo((-3.7 / 37) * 7, 10);
+    expect(impliedWeeklyRate(s)).toBeLessThan(0);
+  });
+
+  it('is positive when the target is above the start', () => {
+    expect(impliedWeeklyRate({ ...s, targetWeight: 69.7 })).toBeCloseTo((3.7 / 37) * 7, 10);
   });
 
   it('is zero when start and goal coincide', () => {
@@ -1857,8 +1864,8 @@ import 'fake-indexeddb/auto';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { db } from '@/db/schema';
 import {
-  getOrCreateDayLog, getOrCreateWeekPlan, listRuns, listWeights,
-  saveRun, saveWeight, softDelete, updateDayLog,
+  getOrCreateDayLog, getOrCreateWeekPlan, listCycles, listRuns, listWeights,
+  saveCycle, saveRun, saveWeight, softDelete, updateDayLog,
 } from '@/db/repos';
 import { DEFAULT_NO_DINNER_DAYS, DEFAULT_RUN_DAYS } from '@/domain/types';
 
@@ -1866,7 +1873,8 @@ beforeEach(async () => {
   await db.open();
   await Promise.all([
     db.dayLogs.clear(), db.weights.clear(), db.runs.clear(),
-    db.weekPlans.clear(), db.outbox.clear(),
+    db.weekPlans.clear(), db.calorieEntries.clear(), db.settings.clear(),
+    db.cycles.clear(), db.outbox.clear(),
   ]);
 });
 
@@ -1943,6 +1951,42 @@ describe('updateDayLog', () => {
     await updateDayLog('u1', '2026-10-06', { ticks: { course: true } });
     const after = await updateDayLog('u1', '2026-10-06', { ticks: { no_dinner: true } });
     expect(after.ticks).toEqual({ course: true, no_dinner: true });
+  });
+});
+
+describe('saveCycle', () => {
+  it('stamps closedAt and enqueues one outbox row', async () => {
+    const cycle = await saveCycle('u1', {
+      startDate: '2026-10-06', goalDate: '2026-11-12',
+      startWeight: 66, targetWeight: 62.3, endWeight: 62.5,
+    });
+    expect(cycle.closedAt).not.toBe('');
+    expect(Number.isNaN(Date.parse(cycle.closedAt))).toBe(false);
+    expect(cycle.deletedAt).toBeNull();
+    expect(await db.outbox.count()).toBe(1);
+  });
+
+  it('keeps each closed cycle rather than replacing the previous one', async () => {
+    await saveCycle('u1', {
+      startDate: '2026-10-06', goalDate: '2026-11-12',
+      startWeight: 66, targetWeight: 62.3, endWeight: 62.5,
+    });
+    await saveCycle('u1', {
+      startDate: '2026-11-13', goalDate: '2026-12-24',
+      startWeight: 62.5, targetWeight: 61, endWeight: null,
+    });
+    const cycles = await listCycles('u1');
+    expect(cycles).toHaveLength(2);
+    expect(cycles.map((c) => c.startDate).sort())
+      .toEqual(['2026-10-06', '2026-11-13']);
+  });
+
+  it('accepts a null end weight, for a cycle that was never weighed', async () => {
+    const cycle = await saveCycle('u1', {
+      startDate: '2026-10-06', goalDate: '2026-11-12',
+      startWeight: 66, targetWeight: 62.3, endWeight: null,
+    });
+    expect(cycle.endWeight).toBeNull();
   });
 });
 
