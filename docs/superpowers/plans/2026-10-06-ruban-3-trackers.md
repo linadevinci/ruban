@@ -887,7 +887,9 @@ git commit -m "feat: add the weight screen with rolling average and trajectory"
 - Test: `src/features/calories/WeekPlanner.test.tsx`
 
 **Interfaces:**
-- Consumes: `getOrCreateWeekPlan`, `updateWeekPlan`; `datesOfIsoWeek`, `weekdayShort`.
+- Consumes: `getWeekPlan`, `updateWeekPlan`; `effectiveWeekPlan`; `datesOfIsoWeek`, `weekdayShort`.
+
+**Read with `getWeekPlan`, never `getOrCreateWeekPlan`.** The get-or-create form *writes*, and this component reads inside `useLiveQuery` — a reactive read that writes to the table it observes. Worse, it is semantically wrong: §4.7 makes each `week_plan` the snapshot of what that week asked, so seeding an unvisited week with today's `DEFAULT_*` invents a snapshot nobody set, and then shows it back as fact. Browsing weeks would also queue sync pushes for rows the user never touched. Read with `getWeekPlan`, pass the result through the pure `effectiveWeekPlan` for display defaults, and let `updateWeekPlan` create the row on the first real edit.
 - Produces: `<WeekPlanner userId isoWeek />`
 
 Seven columns, each with two toggles: *sans dîner* and *course*. Writes only to that week's snapshot, so a past week is never rewritten.
@@ -954,7 +956,8 @@ Expected: FAIL — module not found.
 
 ```tsx
 import { useLiveQuery } from 'dexie-react-hooks';
-import { getOrCreateWeekPlan, updateWeekPlan } from '@/db/repos';
+import { getWeekPlan, updateWeekPlan } from '@/db/repos';
+import { effectiveWeekPlan } from '@/domain/checklist';
 import { datesOfIsoWeek } from '@/domain/calendar';
 import type { IsoWeek, Weekday } from '@/domain/types';
 import { BowCheckbox } from '@/ui/BowCheckbox';
@@ -970,8 +973,11 @@ function toggled(list: Weekday[], day: Weekday, next: boolean): Weekday[] {
 }
 
 export function WeekPlanner({ userId, isoWeek }: { userId: string; isoWeek: IsoWeek }) {
-  const plan = useLiveQuery(() => getOrCreateWeekPlan(userId, isoWeek), [userId, isoWeek]);
-  if (!plan) return <p>Un instant…</p>;
+  // Read-only: a reactive read must not write to the table it observes.
+  const stored = useLiveQuery(() => getWeekPlan(userId, isoWeek), [userId, isoWeek]);
+  // `undefined` means "not loaded yet" on the first pass and "no row" after;
+  // both render the defaults, and the first toggle creates the row.
+  const plan = effectiveWeekPlan(stored);
 
   const days = datesOfIsoWeek(isoWeek).map((_, index) => (index + 1) as Weekday);
 
@@ -1042,7 +1048,7 @@ git commit -m "feat: add the per-week no-dinner and run-day planner"
 - Test: `src/features/calories/useCalories.test.ts`
 
 **Interfaces:**
-- Consumes: `listCalorieEntries`, `saveCalorieEntry`, `softDelete`, `getOrCreateWeekPlan`, `getSettings`; `dayAllowance`, `weeklyBudget`, `weeklyRemaining`, `floorWarnings`; `datesOfIsoWeek`, `isoWeekOf`, `todayIn`.
+- Consumes: `listCalorieEntries`, `saveCalorieEntry`, `softDelete`, `getWeekPlan`, `getSettings`; `dayAllowance`, `weeklyBudget`, `weeklyRemaining`, `floorWarnings`, `dayCalorieTotal`, `weekCalorieTotal`; `effectiveWeekPlan`; `datesOfIsoWeek`, `isoWeekOf`, `todayIn`.
 - Produces:
   - `export interface CaloriesView { today; isoWeek; budget; consumed; remaining; overshoot; warnings; days }`
   - `export interface CaloriesDay { date; weekdayLabel; allowance; consumed; noDinner; entries }`
@@ -1149,9 +1155,11 @@ Expected: FAIL — module not found.
 
 ```ts
 import { useLiveQuery } from 'dexie-react-hooks';
-import { getOrCreateWeekPlan, getSettings, listCalorieEntries } from '@/db/repos';
+import { getSettings, getWeekPlan, listCalorieEntries } from '@/db/repos';
+import { effectiveWeekPlan } from '@/domain/checklist';
 import {
-  dayAllowance, floorWarnings, weeklyBudget, weeklyRemaining, type FloorWarning,
+  dayAllowance, dayCalorieTotal, floorWarnings, weekCalorieTotal,
+  weeklyBudget, weeklyRemaining, type FloorWarning,
 } from '@/domain/budget';
 import { datesOfIsoWeek, isoWeekOf, todayIn, weekdayOf } from '@/domain/calendar';
 import type { CalorieEntry, IsoDate, IsoWeek, Settings, WeekPlan } from '@/domain/types';
@@ -1191,7 +1199,9 @@ export function buildCaloriesView(input: CaloriesInputs): CaloriesView {
   const inWeek = new Set(weekDates);
 
   const entriesThisWeek = input.entries.filter((e) => inWeek.has(e.date));
-  const consumed = entriesThisWeek.reduce((sum, e) => sum + e.kcal, 0);
+  // §4.7's weekly sum lives in the domain; re-deriving it here is how it ended
+  // up implemented twice and tested nowhere.
+  const consumed = weekCalorieTotal(input.entries, isoWeek);
   const remaining = weeklyRemaining(isoWeek, plan, settings, consumed);
 
   const days: CaloriesDay[] = weekDates.map((d) => {
@@ -1200,7 +1210,7 @@ export function buildCaloriesView(input: CaloriesInputs): CaloriesView {
       date: d,
       weekdayLabel: weekdayShort(d),
       allowance: dayAllowance(d, plan, settings),
-      consumed: dayEntries.reduce((sum, e) => sum + e.kcal, 0),
+      consumed: dayCalorieTotal(dayEntries, d),
       // Read the plan directly. Comparing allowances would misreport every
       // day the moment dailyCalorieTarget and noDinnerAllowance coincide.
       noDinner: plan.noDinnerDays.includes(weekdayOf(d)),
@@ -1226,7 +1236,7 @@ export function useCalories(userId: string): CaloriesView | undefined {
     if (!settings) return undefined;
     const date = todayIn(settings.timezone);
     const [plan, entries] = await Promise.all([
-      getOrCreateWeekPlan(userId, isoWeekOf(date)),
+      getWeekPlan(userId, isoWeekOf(date)),
       listCalorieEntries(userId),
     ]);
     return buildCaloriesView({ date, settings, plan, entries });
@@ -1665,6 +1675,7 @@ export function Running({ userId }: { userId: string }) {
         </div>
         <p style={{ margin: '8px 0 0', color: 'var(--ink-soft)' }}>
           {view.summary.totalKm.toFixed(1).replace('.', ',')} km
+          {view.summary.totalDurationS > 0 && ` · ${formatDuration(view.summary.totalDurationS)}`}
           {view.summary.averagePaceSecondsPerKm !== null
             && ` · ${formatPace(view.summary.averagePaceSecondsPerKm)} /km`}
         </p>

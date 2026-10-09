@@ -1226,12 +1226,17 @@ Expected: FAIL — module not found.
 ```ts
 import { useLiveQuery } from 'dexie-react-hooks';
 import {
-  getOrCreateDayLog, getOrCreateWeekPlan, getSettings, listCalorieEntries,
+  getOrCreateDayLog, getSettings, getWeekPlan, listCalorieEntries,
   listDayLogs, listRuns,
 } from '@/db/repos';
-import { weeklyBudget as computeWeeklyBudget, weeklyRemaining } from '@/domain/budget';
+import {
+  dayCalorieTotal, weekCalorieTotal,
+  weeklyBudget as computeWeeklyBudget, weeklyRemaining,
+} from '@/domain/budget';
 import { datesOfIsoWeek, isoWeekOf, todayIn } from '@/domain/calendar';
-import { evaluateChecklist, isDayValidated, type ChecklistItem } from '@/domain/checklist';
+import {
+  effectiveWeekPlan, evaluateChecklist, isDayValidated, type ChecklistItem,
+} from '@/domain/checklist';
 import { canUseJoker, currentStreak } from '@/domain/streak';
 import { daysUntil, isCycleComplete } from '@/domain/trajectory';
 import type { DayLog, IsoDate, Settings, WeekPlan } from '@/domain/types';
@@ -1242,7 +1247,8 @@ interface CalorieRow { date: IsoDate; kcal: number }
 export interface TodayInputs {
   date: IsoDate;
   settings: Settings;
-  plan: WeekPlan;
+  /** Absent until the week is first edited; effectiveWeekPlan supplies defaults. */
+  plan: WeekPlan | undefined;
   log: DayLog;
   dayLogs: DayLog[];
   runsToday: RunRow[];
@@ -1267,10 +1273,12 @@ export interface TodayView {
 
 /** Pure assembler: plain values in, a view out. No IO, so it is directly testable. */
 export function buildTodayView(input: TodayInputs): TodayView {
-  const { date, settings, plan, log } = input;
-  const calorieTotal = input.calorieEntriesToday.reduce((sum, e) => sum + e.kcal, 0);
-  const consumedThisWeek = input.calorieEntriesWeek.reduce((sum, e) => sum + e.kcal, 0);
+  const { date, settings, log } = input;
+  const plan = effectiveWeekPlan(input.plan);
   const week = isoWeekOf(date);
+  // §4.7's sums come from the domain, not from each screen re-deriving them.
+  const calorieTotal = dayCalorieTotal(input.calorieEntriesToday, date);
+  const consumedThisWeek = weekCalorieTotal(input.calorieEntriesWeek, week);
 
   const items = evaluateChecklist({
     date, plan, settings, log,
@@ -1311,7 +1319,10 @@ export function useToday(userId: string): TodayView | undefined {
     const weekDates = new Set(datesOfIsoWeek(week));
 
     const [plan, log, dayLogs, runs, calorieEntries] = await Promise.all([
-      getOrCreateWeekPlan(userId, week),
+      // Read-only for the plan: opening the app must not invent a week plan.
+      getWeekPlan(userId, week),
+      // getOrCreate for today's log, deliberately: the user is here to tick it,
+      // syncStamps writes to it anyway, and a row for today is a real fact.
       getOrCreateDayLog(userId, date),
       listDayLogs(userId),
       listRuns(userId),
