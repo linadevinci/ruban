@@ -17,6 +17,8 @@
 Three items carried out of Plan 1's final review. All are latent there — Plan 1 has no
 runtime database consumer — and all become reachable the moment a screen opens Dexie.
 
+**Each is allocated to the task that first needs it: (1) → Task 5, (2) → Task 6, (3) → Task 7.** They were prose with no task until the pre-flight scan caught it — the same defect as a spec section with no owner.
+
 1. **A `version(2)` upgrade that de-duplicates, plus an open-failure path.** Plan 1 made
    `dayLogs`, `weights` and `weekPlans` unique on their natural key *in place* under
    `version(1)`. This was probed against real Dexie + fake-indexeddb: an existing database
@@ -391,12 +393,14 @@ npm install framer-motion dexie-react-hooks react-router
 npm install -D @testing-library/react @testing-library/user-event @testing-library/jest-dom jsdom
 ```
 
-In `vite.config.ts`, **replace** `environment: 'node'` with the following (two `environment` keys would silently keep the first):
+In `vite.config.ts`, **replace only the `environment: 'node'` line** with the two lines below. Leave `include` and `env` exactly as they are — in particular **keep `env: { TZ: 'Europe/Paris' }`**, which Plan 1's fix wave added so the DST cases can actually fail; dropping it silently returns them to proving nothing. Do not replace the whole `test` block, and do not add a second `environment` key (two would silently keep the first).
 
 ```ts
 environment: 'jsdom',
 setupFiles: ['./src/test-setup.ts'],
 ```
+
+After editing, confirm the block still contains `include`, `env.TZ` and exactly one `environment` key.
 
 Create `src/test-setup.ts`:
 
@@ -803,6 +807,16 @@ git commit -m "feat: add card, button, pill and stepper primitives"
   - `getCurrentUserId(): Promise<string | null>`
   - `ensureLocalUser(): Promise<string>` — creates and remembers a UUIDv7 on first run
   - `CURRENT_USER_KEY` (the meta key, exported for tests)
+  - `openDatabase(): Promise<{ ok: true } | { ok: false; reason: 'corrupt' | 'unknown'; error: unknown }>` in `src/db/schema.ts`
+
+**This task also carries precondition 1, because it is the first code that opens the database.**
+
+Plan 1 declared `dayLogs`, `weights` and `weekPlans` unique on their natural key *in place* under `version(1)`. That was probed against real Dexie: a database that already holds two rows sharing a `(userId, date)` **cannot be opened at all** — `db.open()` rejects with `AbortError`/`ConstraintError` — and **bumping the version alone does not fix it**, because IndexedDB cannot build a unique index over data that already violates it. So:
+
+1. Add a `version(2)` to `RubanDb` declaring the same stores, whose `.upgrade(tx)` walks `dayLogs`, `weights` and `weekPlans`, groups rows by their natural key, keeps the one with the newest `updatedAt` and deletes the rest. The de-duplication must happen in the upgrade, before the unique index is rebuilt.
+2. Add `openDatabase()` wrapping `db.open()` in a try/catch that returns a discriminated result rather than throwing, so the app can render something recoverable instead of a blank screen. Nothing in `src/` handles an open rejection today.
+
+Tests: a fresh database opens with `{ ok: true }`; and — the one that matters — seed a `version(1)` database containing two `dayLogs` rows with the same `(userId, date)` and different ids, then open at `version(2)` and assert it succeeds with exactly one row surviving, the newer `updatedAt` one. Write that second test first and watch it fail against a `version(2)` with no `upgrade` body, so you know it is the de-duplication being tested and not the version bump.
 
 Plan 4 claims this same id on the server at signup, so it is generated once here and never changes. That is the whole reason auth can be deferred without a migration.
 
@@ -892,6 +906,15 @@ git commit -m "feat: add local session with a stable user id"
 **Interfaces:**
 - Consumes: `ensureLocalUser`, `saveSettings`, `impliedWeeklyRate`, `todayIn`, `kg`, primitives.
 - Produces: `<Onboarding onDone={() => void} />`
+
+**This task also carries precondition 2, because it is the first code to write and read a timezone.**
+
+Onboarding stores `Intl.DateTimeFormat().resolvedOptions().timeZone`, and every later screen reads it back and hands it to `todayIn`. Two gaps close here:
+
+1. Add `isValidTimeZone(tz: string): boolean` to `src/domain/calendar.ts` — a `try { new Intl.DateTimeFormat('en-CA', { timeZone: tz }); return true } catch { return false }`. Onboarding falls back to `'UTC'` when the detected zone fails it, rather than storing a value that makes `todayIn` throw `RangeError` on every later render.
+2. Make `todayIn` **throw** when `formatToParts` omits a part, instead of its current `?? ''`, which would return a malformed date such as `2026--06`. A wrong day is a bug; a malformed string that flows into every date comparison is worse.
+
+Tests: `isValidTimeZone` accepts `'Europe/Paris'` and rejects `'Not/AZone'`; onboarding stores a non-empty, valid zone. Both are one-liners.
 
 Fields, with defaults: poids de départ (empty), objectif (empty), date objectif (`2026-11-12`), cible calories (`1500`), allocation sans dîner (`900`), seuil minimum (`1200`), objectif de pas (`8000`), verres d'eau (`6`), sorties par semaine (`5`). Timezone is detected via `Intl.DateTimeFormat().resolvedOptions().timeZone` and not asked. `startDate` is today. The implied weekly rate is displayed live once both weights are entered — shown, never enforced, never editorialised.
 
@@ -1143,6 +1166,8 @@ git commit -m "feat: add onboarding that writes the settings row"
 
 Splitting the pure `buildTodayView` out of the hook is deliberate: the assembly logic is where a wrong argument order would hide, and a pure function can be tested without rendering anything.
 
+**This task also carries precondition 3.** It calls both `getWeekPlan` (read-only, returns `undefined` for a tombstoned row) and `getOrCreateDayLog` (returns a tombstoned row as if it were live). Decide deliberately and write the decision into a comment: **a tombstoned day log must not be treated as today's log.** Only Plan 4's pull can tombstone one, so this is not reachable yet — but the hook is where it would surface, and discovering it later means a user's ticks vanishing into an invisible row. If `getOrCreateDayLog` returns a row whose `deletedAt` is non-null, treat the day as unlogged.
+
 - [ ] **Step 1: Write the failing test**
 
 ```ts
@@ -1263,7 +1288,8 @@ import {
 } from '@/domain/budget';
 import { datesOfIsoWeek, isoWeekOf, todayIn } from '@/domain/calendar';
 import {
-  effectiveWeekPlan, evaluateChecklist, isDayValidated, type ChecklistItem,
+  effectiveWeekPlan, evaluateChecklist, isDayValidated,
+  type ChecklistItem, type ChecklistPlan,
 } from '@/domain/checklist';
 import { canUseJoker, currentStreak } from '@/domain/streak';
 import { daysUntil, isCycleComplete } from '@/domain/trajectory';
@@ -1287,7 +1313,9 @@ export interface TodayInputs {
 export interface TodayView {
   date: IsoDate;
   settings: Settings;
-  plan: WeekPlan;
+  /** Resolved through effectiveWeekPlan, so it is the narrow shape, not the
+   *  stored row — the row may not exist until the week is first edited. */
+  plan: ChecklistPlan;
   log: DayLog;
   items: ChecklistItem[];
   validated: boolean;
