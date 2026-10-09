@@ -2224,7 +2224,7 @@ git commit -m "feat: add repositories that stamp updatedAt and enqueue sync"
 
 ## Plan 1 Done When
 
-- `npm test` passes with coverage of every rule in spec §4.
+- `npm test` passes with coverage of the spec §4 rules **allocated to this plan**: §4.1 (time), §4.2 (checklist applicability and satisfaction), §4.4 (joker eligibility, less the week-selection the caller resolves — see Plan 2), §4.6 (rolling average and trajectory), §4.7 (budget) and §4.8 (running). **Not** §4.3's validation stamping or §4.5's one-time bonus (Plan 2) or §4.9's cycle summary (Plan 3) — those have no domain home here, and the earlier wording invited a false tick.
 - `npx tsc -b` is clean.
 - `src/domain/` imports nothing from `src/db/`, React, or any date library. Verify: `grep -rE "from '(dexie|react|date-fns)" src/domain/` returns nothing.
 - `src/domain/` and `src/shared/` use no `@/` alias, so `api/` can import them. Verify: `grep -rn "from '@/" src/domain/ src/shared/` returns nothing.

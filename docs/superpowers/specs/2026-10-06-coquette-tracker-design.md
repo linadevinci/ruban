@@ -148,7 +148,7 @@ Ten tables in Phase 1, mirrored between Dexie and Postgres. Every synced row car
 - `users` — id, username (unique), password_hash, recovery_code_hash, created_at
 - `settings` — user_id (pk), timezone, start_date, start_weight, target_weight, goal_date, weigh_in_cadence, daily_calorie_target, no_dinner_allowance, calorie_floor, step_target, water_target, run_sessions_target, sound_enabled, updated_at
 - `day_logs` — id, user_id, date, ticks (jsonb map of item → bool), steps, water_glasses, jokered, validated_at, bonus_fired_at, mood, energy, note, updated_at, deleted_at. Unique on (user_id, date)
-- `weights` — id, user_id, date, kg, updated_at, deleted_at
+- `weights` — id, user_id, date, kg, updated_at, deleted_at. Unique on (user_id, date)
 - `calorie_entries` — id, user_id, date, label, kcal, updated_at, deleted_at
 - `runs` — id, user_id, date, distance_km, duration_s, note, updated_at, deleted_at
 - `week_plans` — id, user_id, iso_week (`2026-W41`), no_dinner_days (int[]), run_days (int[]), joker_used_on, updated_at. Unique on (user_id, iso_week)
@@ -162,6 +162,10 @@ Server-only, not synced to the client:
 - `login_attempts` — username, attempts, locked_until
 
 `ticks` is a jsonb map rather than fixed columns so Phase 2's pilates and class items need no migration.
+
+**The uniqueness constraints above and the client-generated-id rule are in tension, deliberately recorded rather than resolved here.** `day_logs`, `weights` and `week_plans` are singletons per key: one row per (user, date) or (user, ISO week). But each client mints its own UUIDv7, so two devices that open the app offline on the same day each create a *different* id for the same logical row. Locally both rows exist and a `.first()` lookup silently picks one, losing the other's data; on sync the second violates the unique constraint and the outbox stops draining.
+
+Phase 1 mitigates this by declaring the Dexie compound indexes unique, which turns a silent split into a loud `ConstraintError` at the point of creation. That is a guard, not a fix. **Plan 4 must settle it before multi-device sync ships**, and the two candidate answers conflict with rules stated elsewhere in this document: either these three tables get a *deterministic* id derived from their key (contradicting the UUIDv7 rule above), or §7's merge gains a defined rule for two ids claiming one key (contradicting "conflicts are per record"). Until then the app is single-device-safe and multi-device-unsafe, which is acceptable only because §7's own premise is one person on one phone.
 
 **Derived, never stored:** streak, rolling average, weekly budget and remaining, pace, trajectory values, badge eligibility. Computed on read so a settings change recalculates cleanly with nothing to fall out of sync. The deliberate exceptions are the event stamps `validated_at`, `bonus_fired_at` and `joker_used_on` — those are facts about what happened, not derivations from current settings.
 
@@ -191,7 +195,7 @@ Features own their screens and read through `db/`; they never reach into each ot
 
 Single endpoint, `POST /api/sync`, body `{ since, changes[] }`.
 
-1. Every local write lands in a Dexie `outbox` row `{ id, table, op, payload, created_at, attempts }` inside the same transaction as the data write, then the UI returns. The network is never on the critical path.
+1. Every local write lands in a Dexie `outbox` row `{ seq, table, op, payload, created_at, attempts }` inside the same transaction as the data write, then the UI returns. **`seq` is an auto-increment integer, not a uuid** — that is what gives the queue its ordering guarantee, so replay happens in the order the writes were made. An opaque id would not, and ordering matters here: two edits to one field must reach the server in the order the user made them. The network is never on the critical path.
 2. The server applies each incoming change **only where its `updated_at` is strictly newer** than the stored row's, then returns every row of that user changed since `since`.
 3. The client applies the returned rows, clears the acknowledged outbox entries, and stores the new cursor.
 

@@ -1052,7 +1052,7 @@ beforeEach(async () => {
   await Promise.all([
     db.weights.clear(), db.runs.clear(), db.dayLogs.clear(),
     db.calorieEntries.clear(), db.weekPlans.clear(), db.settings.clear(),
-    db.outbox.clear(), db.meta.clear(),
+    db.cycles.clear(), db.outbox.clear(), db.meta.clear(),
   ]);
 });
 
