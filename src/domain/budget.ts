@@ -1,5 +1,5 @@
 import { datesOfIsoWeek, weekdayOf } from './calendar';
-import type { IsoDate, IsoWeek, Settings, WeekPlan } from './types';
+import type { CalorieEntry, IsoDate, IsoWeek, Settings, WeekPlan } from './types';
 
 export type BudgetPlan = Pick<WeekPlan, 'noDinnerDays'>;
 export type BudgetSettings = Pick<
@@ -46,6 +46,18 @@ export function weeklyRemaining(
   consumedKcal: number,
 ): number {
   return weeklyBudget(week, plan, settings) - consumedKcal;
+}
+
+/** Spec 4.7 sums kcal over a date or a week; this is that sum's one home. */
+export type CalorieEntryLike = Pick<CalorieEntry, 'date' | 'kcal'>;
+
+export function dayCalorieTotal(entries: CalorieEntryLike[], date: IsoDate): number {
+  return entries.reduce((total, e) => (e.date === date ? total + e.kcal : total), 0);
+}
+
+export function weekCalorieTotal(entries: CalorieEntryLike[], week: IsoWeek): number {
+  const dates = new Set(datesOfIsoWeek(week));
+  return entries.reduce((total, e) => (dates.has(e.date) ? total + e.kcal : total), 0);
 }
 
 export function floorWarnings(settings: BudgetSettings): FloorWarning[] {

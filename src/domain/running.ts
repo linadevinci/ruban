@@ -7,6 +7,7 @@ export interface WeeklyRunSummary {
   sessions: number;
   target: number;
   totalKm: number;
+  totalDurationS: number;
   averagePaceSecondsPerKm: number | null;
 }
 
@@ -44,6 +45,7 @@ export function weeklyRunSummary(
     sessions: inWeek.length,
     target: sessionsTarget,
     totalKm,
+    totalDurationS: totalS,
     averagePaceSecondsPerKm: paceSecondsPerKm(totalKm, totalS),
   };
 }

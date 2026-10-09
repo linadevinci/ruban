@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
-  dayAllowance, floorWarnings, weeklyBudget, weeklyRemaining,
-  type BudgetPlan, type BudgetSettings,
+  dayAllowance, dayCalorieTotal, floorWarnings, weekCalorieTotal,
+  weeklyBudget, weeklyRemaining,
+  type BudgetPlan, type BudgetSettings, type CalorieEntryLike,
 } from '@/domain/budget';
 
 const settings: BudgetSettings = {
@@ -90,5 +91,34 @@ describe('floorWarnings', () => {
       { kind: 'daily', value: 1500, floor: 1600 },
       { kind: 'noDinner', value: 900, floor: 1600 },
     ]);
+  });
+});
+
+describe('dayCalorieTotal / weekCalorieTotal', () => {
+  const kcal = (date: string, amount: number): CalorieEntryLike => ({ date, kcal: amount });
+
+  it('sums a day and ignores every other date', () => {
+    const entries = [
+      kcal('2026-10-05', 500), kcal('2026-10-06', 420),
+      kcal('2026-10-06', 380), kcal('2026-10-07', 900),
+    ];
+    expect(dayCalorieTotal(entries, '2026-10-06')).toBe(800);
+  });
+
+  it('sums a week and ignores the day on either side of it', () => {
+    // 2026-W41 runs Monday 5 to Sunday 11 October.
+    const entries = [
+      kcal('2026-10-04', 1000), // Sunday of W40 — one day before
+      kcal('2026-10-05', 400),
+      kcal('2026-10-08', 600),
+      kcal('2026-10-11', 500),
+      kcal('2026-10-12', 1000), // Monday of W42 — one day after
+    ];
+    expect(weekCalorieTotal(entries, '2026-W41')).toBe(1500);
+  });
+
+  it('returns 0 for no entries rather than NaN', () => {
+    expect(dayCalorieTotal([], '2026-10-06')).toBe(0);
+    expect(weekCalorieTotal([], '2026-W41')).toBe(0);
   });
 });

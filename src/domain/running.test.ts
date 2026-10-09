@@ -64,8 +64,19 @@ describe('weeklyRunSummary', () => {
 
   it('reports an empty week without dividing by zero', () => {
     expect(weeklyRunSummary([], '2026-W41', 5)).toEqual({
-      sessions: 0, target: 5, totalKm: 0, averagePaceSecondsPerKm: null,
+      sessions: 0, target: 5, totalKm: 0, totalDurationS: 0,
+      averagePaceSecondsPerKm: null,
     });
+  });
+
+  it('totals the duration of the in-week runs only', () => {
+    const runs = [
+      run('2026-10-04', 6, 2100),   // Sunday of W40 — excluded
+      run('2026-10-05', 5, 1500),
+      run('2026-10-06', 5.2, 1600),
+      run('2026-10-12', 7, 2400),   // Monday of W42 — excluded
+    ];
+    expect(weeklyRunSummary(runs, '2026-W41', 5).totalDurationS).toBe(3100);
   });
 
   it('counts two runs on the same day as two sessions', () => {

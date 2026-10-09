@@ -1,6 +1,9 @@
 import { dayAllowance, type BudgetSettings } from './budget';
 import { weekdayOf } from './calendar';
-import type { ChecklistItemId, DayLog, IsoDate, Settings, WeekPlan } from './types';
+import {
+  DEFAULT_NO_DINNER_DAYS, DEFAULT_RUN_DAYS,
+  type ChecklistItemId, type DayLog, type IsoDate, type Settings, type WeekPlan,
+} from './types';
 
 export type ChecklistPlan = Pick<WeekPlan, 'runDays' | 'noDinnerDays'>;
 
@@ -20,6 +23,18 @@ export interface DayEvaluation {
   runCount: number;
   calorieTotal: number;
   calorieEntryCount: number;
+}
+
+/**
+ * The plan a week is judged by, without persisting anything. getOrCreateWeekPlan
+ * writes on read, which fabricates a snapshot for a past week that was never
+ * planned; a screen that merely looks at a week uses this instead.
+ */
+export function effectiveWeekPlan(plan: WeekPlan | undefined): ChecklistPlan {
+  return plan ?? {
+    runDays: [...DEFAULT_RUN_DAYS],
+    noDinnerDays: [...DEFAULT_NO_DINNER_DAYS],
+  };
 }
 
 /** Stable render order; the UI never re-sorts. */

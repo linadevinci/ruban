@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
-  applicableItems, evaluateChecklist, isDayValidated,
+  applicableItems, effectiveWeekPlan, evaluateChecklist, isDayValidated,
   type ChecklistPlan, type DayEvaluation,
 } from '@/domain/checklist';
-import type { DayLog, Settings } from '@/domain/types';
+import {
+  DEFAULT_NO_DINNER_DAYS, DEFAULT_RUN_DAYS,
+  type DayLog, type Settings, type WeekPlan,
+} from '@/domain/types';
 
 const plan: ChecklistPlan = { runDays: [1, 2, 4, 6, 7], noDinnerDays: [3, 7] };
 
@@ -33,6 +36,36 @@ function evaluation(partial: Partial<DayEvaluation> = {}): DayEvaluation {
     ...partial,
   };
 }
+
+describe('effectiveWeekPlan', () => {
+  const stored: WeekPlan = {
+    id: 'w', userId: 'u', updatedAt: '', deletedAt: null,
+    isoWeek: '2026-W41', runDays: [2, 5], noDinnerDays: [1], jokerUsedOn: null,
+  };
+
+  it('returns the stored plan unchanged', () => {
+    const result = effectiveWeekPlan(stored);
+    expect(result).toBe(stored); // the same object, with no default merged in
+    expect(result.runDays).toEqual([2, 5]);
+    expect(result.noDinnerDays).toEqual([1]);
+  });
+
+  it('supplies the spec defaults for a week that was never planned', () => {
+    expect(effectiveWeekPlan(undefined)).toEqual({
+      runDays: [...DEFAULT_RUN_DAYS],
+      noDinnerDays: [...DEFAULT_NO_DINNER_DAYS],
+    });
+  });
+
+  it('returns copies, so mutating the result cannot alter the shared constants', () => {
+    const plan = effectiveWeekPlan(undefined);
+    plan.runDays.push(3);
+    plan.noDinnerDays.length = 0;
+    expect(DEFAULT_RUN_DAYS).toEqual([1, 2, 4, 6, 7]);
+    expect(DEFAULT_NO_DINNER_DAYS).toEqual([3, 7]);
+    expect(effectiveWeekPlan(undefined).runDays).toEqual([...DEFAULT_RUN_DAYS]);
+  });
+});
 
 describe('applicableItems', () => {
   it('shows course on a planned run day', () => {
