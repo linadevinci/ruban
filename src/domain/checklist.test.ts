@@ -75,6 +75,13 @@ describe('evaluateChecklist', () => {
     expect(items.find((i) => i.id === 'calories')?.satisfied).toBe(false);
   });
 
+  it('satisfies calories when the total lands exactly on the allowance', () => {
+    // Logging exactly to target is a hit, not a miss. Tuesday's allowance is
+    // the 1500 daily target.
+    const items = evaluateChecklist(evaluation({ calorieTotal: 1500, calorieEntryCount: 3 }));
+    expect(items.find((i) => i.id === 'calories')?.satisfied).toBe(true);
+  });
+
   it('auto-unsatisfies calories once the total passes the allowance', () => {
     const items = evaluateChecklist(evaluation({ calorieTotal: 1700, calorieEntryCount: 4 }));
     expect(items.find((i) => i.id === 'calories')?.satisfied).toBe(false);

@@ -55,9 +55,11 @@ describe('weeklyRunSummary', () => {
   });
 
   it('averages pace over total distance and total time, not over runs', () => {
-    const runs = [run('2026-10-05', 5, 1500), run('2026-10-06', 5, 1600)];
+    // Unequal distances, so the two algorithms disagree: total over total is
+    // 3390 / 10 = 339, while a mean of the per-run paces (240 and 350) is 295.
+    const runs = [run('2026-10-05', 1, 240), run('2026-10-06', 9, 3150)];
     const summary = weeklyRunSummary(runs, '2026-W41', 5);
-    expect(summary.averagePaceSecondsPerKm).toBeCloseTo(3100 / 10, 10);
+    expect(summary.averagePaceSecondsPerKm).toBeCloseTo(339, 10);
   });
 
   it('reports an empty week without dividing by zero', () => {

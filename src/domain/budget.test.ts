@@ -76,6 +76,15 @@ describe('floorWarnings', () => {
     ]);
   });
 
+  it('does not flag an allowance that sits exactly on the floor', () => {
+    // Strictly below is a warning; equal is not. Without this case, flipping
+    // the comparison to <= leaves the whole suite green.
+    expect(floorWarnings({ ...settings, calorieFloor: 900 })).toEqual([]);
+    expect(floorWarnings({ ...settings, calorieFloor: 1500 })).toEqual([
+      { kind: 'noDinner', value: 900, floor: 1500 },
+    ]);
+  });
+
   it('flags both allowances when both sit below the floor', () => {
     expect(floorWarnings({ ...settings, calorieFloor: 1600 })).toEqual([
       { kind: 'daily', value: 1500, floor: 1600 },

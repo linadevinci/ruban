@@ -64,6 +64,13 @@ describe('currentStreak', () => {
     expect(currentStreak(days, '2026-10-02', '2026-10-01')).toBe(2);
   });
 
+  it('counts startDate itself, the day the streak can reach but not pass', () => {
+    // The walk terminates on diffDays(startDate, cursor) >= 0, so the cursor
+    // must still count when it lands exactly on startDate.
+    const days = [validated('2026-10-01'), validated('2026-10-02'), validated('2026-10-03')];
+    expect(currentStreak(days, '2026-10-03', '2026-10-01')).toBe(3);
+  });
+
   it('counts the 25 October 2026 DST day as exactly one day', () => {
     const days = [
       validated('2026-10-23'), validated('2026-10-24'),
