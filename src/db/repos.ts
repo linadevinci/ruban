@@ -81,10 +81,25 @@ export async function softDelete(
 ): Promise<void> {
   await db.transaction('rw', db[table], db.outbox, async () => {
     const deletedAt = nowIso();
-    await db[table].update(id, { deletedAt, updatedAt: deletedAt });
+    const updated = await db[table].update(id, { deletedAt, updatedAt: deletedAt });
+    // update() resolves 0 for a missing key without throwing, and get() then
+    // returns undefined. Enqueuing anyway would hand Plan 4's engine a change
+    // carrying no id — reachable by double-tapping a delete button, or by a
+    // delete racing a pull that already tombstoned the row.
+    if (updated === 0) return;
     const row = await db[table].get(id);
     await enqueue(table, 'delete', row);
   });
+}
+
+/**
+ * Read-only: never writes, so a reactive read inside useLiveQuery cannot
+ * trigger the table it observes. Returns undefined for a tombstoned row, the
+ * same way the list helpers filter it out.
+ */
+export async function getDayLog(userId: string, date: IsoDate): Promise<DayLog | undefined> {
+  const row = await db.dayLogs.where('[userId+date]').equals([userId, date]).first();
+  return row !== undefined && row.deletedAt === null ? row : undefined;
 }
 
 export async function getOrCreateDayLog(userId: string, date: IsoDate): Promise<DayLog> {
@@ -110,7 +125,9 @@ export async function getOrCreateDayLog(userId: string, date: IsoDate): Promise<
 export async function updateDayLog(
   userId: string,
   date: IsoDate,
-  patch: Partial<Omit<DayLog, 'id' | 'userId' | 'date'>>,
+  // deletedAt is excluded on purpose: tombstoning belongs to softDelete, whose
+  // table union is deliberately narrow. updatedAt is always set here.
+  patch: Partial<Omit<DayLog, 'id' | 'userId' | 'date' | 'deletedAt' | 'updatedAt'>>,
 ): Promise<DayLog> {
   let row!: DayLog;
   // The read and the write share ONE transaction. Reading via
@@ -137,6 +154,15 @@ export async function updateDayLog(
     await enqueue('dayLogs', 'put', row);
   });
   return row;
+}
+
+/** Read-only counterpart to getOrCreateWeekPlan; see getDayLog. */
+export async function getWeekPlan(
+  userId: string,
+  isoWeek: IsoWeek,
+): Promise<WeekPlan | undefined> {
+  const row = await db.weekPlans.where('[userId+isoWeek]').equals([userId, isoWeek]).first();
+  return row !== undefined && row.deletedAt === null ? row : undefined;
 }
 
 export async function getOrCreateWeekPlan(userId: string, isoWeek: IsoWeek): Promise<WeekPlan> {
