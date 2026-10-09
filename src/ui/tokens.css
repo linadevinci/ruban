@@ -1,0 +1,53 @@
+:root {
+  --ground: #F7E3E6;
+  --surface: #FFFBF7;
+  --inset: #FDF2F4;
+  --ink: #6E2B45;
+  --ink-soft: #9A6579;
+  --rose: #E89BB0;
+  --cerise: #C2567A;
+  --line: #EDCCD6;
+  --on-rose: #43131F;
+
+  --font-display: "Cormorant Garamond", Georgia, serif;
+  --font-ui: "Jost", system-ui, -apple-system, sans-serif;
+  --font-hand: "Caveat", cursive;
+
+  --r-card: 20px;
+  --r-pill: 999px;
+
+  --step--1: 0.78rem;
+  --step-0: 0.95rem;
+  --step-1: 1.2rem;
+  --step-2: 1.6rem;
+  --step-3: 2.4rem;
+  --step-4: 4rem;
+}
+
+/* System dark, with an explicit light choice still winning. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground: #1B0F15;
+    --surface: #2A1821;
+    --inset: #231420;
+    --ink: #F7E5EA;
+    --ink-soft: #C098AA;
+    --rose: #EFA6BA;
+    --cerise: #F57FA6;
+    --line: #412833;
+    --on-rose: #2A1821;
+  }
+}
+
+/* Explicit dark choice wins over a light OS. */
+:root[data-theme="dark"] {
+  --ground: #1B0F15;
+  --surface: #2A1821;
+  --inset: #231420;
+  --ink: #F7E5EA;
+  --ink-soft: #C098AA;
+  --rose: #EFA6BA;
+  --cerise: #F57FA6;
+  --line: #412833;
+  --on-rose: #2A1821;
+}
