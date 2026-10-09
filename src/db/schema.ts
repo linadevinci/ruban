@@ -35,11 +35,16 @@ export class RubanDb extends Dexie {
     super('ruban');
     this.version(1).stores({
       settings: 'userId, updatedAt',
-      dayLogs: 'id, [userId+date], updatedAt',
-      weights: 'id, [userId+date], updatedAt',
+      // The three singletons are unique: one row per (user, date) or
+      // (user, ISO week). Without that, two devices offline on the same day
+      // each mint a different UUIDv7 for the same logical row, both rows
+      // exist, and .first() silently picks one while the other's data becomes
+      // permanently invisible. calorieEntries and runs allow many per date.
+      dayLogs: 'id, &[userId+date], updatedAt',
+      weights: 'id, &[userId+date], updatedAt',
       calorieEntries: 'id, [userId+date], updatedAt',
       runs: 'id, [userId+date], updatedAt',
-      weekPlans: 'id, [userId+isoWeek], updatedAt',
+      weekPlans: 'id, &[userId+isoWeek], updatedAt',
       cycles: 'id, [userId+startDate], updatedAt',
       outbox: '++seq, table, createdAt',
       meta: 'key',

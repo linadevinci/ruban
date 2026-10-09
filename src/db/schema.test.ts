@@ -25,6 +25,18 @@ describe('nowIso', () => {
   it('produces a parseable ISO 8601 string', () => {
     expect(Number.isNaN(Date.parse(nowIso()))).toBe(false);
   });
+
+  it('is strictly increasing, so two writes in one millisecond differ', () => {
+    // Spec 7 applies an incoming change only where updatedAt is STRICTLY
+    // newer. A repeated stamp means the second write is dropped server-side.
+    const stamps = Array.from({ length: 500 }, () => nowIso());
+    for (const stamp of stamps) {
+      expect(Number.isNaN(Date.parse(stamp))).toBe(false);
+    }
+    const ties = stamps.filter((s, i) => i > 0 && Date.parse(s) <= Date.parse(stamps[i - 1] ?? ''));
+    expect(ties).toEqual([]);
+    expect(new Set(stamps).size).toBe(stamps.length);
+  });
 });
 
 describe('db schema', () => {
@@ -39,6 +51,20 @@ describe('db schema', () => {
     const found = await db.dayLogs.where('[userId+date]').equals(['u1', '2026-10-06']).first();
     expect(found?.id).toBe(id);
     expect(found?.ticks.course).toBe(true);
+  });
+
+  it('rejects a second day log for the same user and date', async () => {
+    // The compound index is unique, so two devices that each minted their own
+    // id for one logical day fail loudly instead of splitting the row in two.
+    const row = {
+      userId: 'u1', updatedAt: nowIso(), deletedAt: null,
+      date: '2026-10-06', ticks: {}, steps: null, waterGlasses: null,
+      jokered: false, validatedAt: null, bonusFiredAt: null,
+      mood: null, energy: null, note: null,
+    };
+    await db.dayLogs.put({ ...row, id: newId() });
+    await expect(db.dayLogs.put({ ...row, id: newId() })).rejects.toThrow(/Constraint/i);
+    expect(await db.dayLogs.count()).toBe(1);
   });
 
   it('keeps one settings row per user', async () => {
@@ -72,8 +98,16 @@ describe('enqueue', () => {
   });
 
   it('records a delete as a tombstone op rather than removing anything', async () => {
-    await enqueue('runs', 'delete', { id: 'b', deletedAt: nowIso() });
+    const deletedAt = nowIso();
+    await enqueue('runs', 'delete', { id: 'b', deletedAt });
     const row = await db.outbox.orderBy('seq').last();
     expect(row?.op).toBe('delete');
+    expect(row?.table).toBe('runs');
+    // Spec 7: a tombstone syncs like any other change, so the payload has to
+    // carry the id and a non-null deletedAt or the server cannot apply it.
+    const payload = row?.payload as { id?: string; deletedAt?: string | null } | undefined;
+    expect(payload?.id).toBe('b');
+    expect(payload?.deletedAt).toBe(deletedAt);
+    expect(payload?.deletedAt).not.toBeNull();
   });
 });
