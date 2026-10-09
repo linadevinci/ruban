@@ -296,9 +296,9 @@ describe('signedKg', () => {
 
 describe('kcal', () => {
   it('groups thousands with a narrow no-break space', () => {
-    expect(kcal(2400)).toBe('2 400');
+    expect(kcal(2400)).toBe('2\u202f400');
     expect(kcal(900)).toBe('900');
-    expect(kcal(-300)).toBe('−300');
+    expect(kcal(-300)).toBe('\u2212300');
   });
 });
 
@@ -333,8 +333,8 @@ Expected: FAIL — module not found.
 import { parseIsoDate } from '@/domain/calendar';
 import type { IsoDate } from '@/domain/types';
 
-const NARROW_NBSP = ' ';
-const MINUS = '−';
+const NARROW_NBSP = '\u202f'; // narrow no-break space
+const MINUS = '\u2212'; // true minus sign, not a hyphen
 
 export function kg(value: number): string {
   return value.toFixed(1).replace('.', ',');

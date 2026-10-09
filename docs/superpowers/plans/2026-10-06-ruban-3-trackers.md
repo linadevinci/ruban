@@ -2476,7 +2476,7 @@ export function CycleComplete({
               {kg(summary.startWeight)} →{' '}
               {summary.endWeight === null ? '—' : kg(summary.endWeight)} kg
               {summary.deltaKg !== null
-                && ` (${summary.deltaKg < 0 ? '−' : '+'}${kg(Math.abs(summary.deltaKg))})`}
+                && ` (${summary.deltaKg < 0 ? '\u2212' : '+'}${kg(Math.abs(summary.deltaKg))})`}
             </span>
           </div>
           <div style={{ display: 'flex', justifyContent: 'space-between' }}>
