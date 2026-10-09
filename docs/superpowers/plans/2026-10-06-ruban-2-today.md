@@ -236,8 +236,14 @@ Open the app, then toggle your OS between light and dark. Expected: the backgrou
 
 - [ ] **Step 5: Commit**
 
+Also remove the single line `import './App.css';` from `src/App.tsx`. That file is the Vite
+template placeholder and Task 11 deletes it outright, but it is still rendered until then, so
+its stylesheet has to go with it here — otherwise the template's styles fight the design
+system you just added, and `npm run build` fails outright on the unresolved import. Removing
+one import line is not "modifying App.tsx" in any meaningful sense; leave the rest of it alone.
+
 ```bash
-git add src/ui index.html src/main.tsx
+git add src/ui index.html src/main.tsx src/App.tsx
 git rm -f src/index.css src/App.css
 git commit -m "feat: add coquette design tokens and base stylesheet"
 ```
