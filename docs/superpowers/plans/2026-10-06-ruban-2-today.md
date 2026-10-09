@@ -46,11 +46,13 @@ runtime database consumer — and all become reachable the moment a screen opens
 
 Identical to Plan 1's Global Constraints section — read it there; every item applies here. The ones this plan exercises directly:
 
-- **Palette:** ground `#F7E3E6`, surface `#FFFBF7`, inset `#FDF2F4`, rose `#E89BB0`, cerise `#C2567A`, ink `#6E2B45`, ink-soft `#9A6579`, line `#EDCCD6`. Dark: ground `#1B0F15`, surface `#2A1821`, inset `#231420`, ink `#F7E5EA`, ink-soft `#C098AA`, rose `#EFA6BA`, cerise `#F57FA6`, line `#412833`.
+- **Palette:** ground `#F7E3E6`, surface `#FFFBF7`, inset `#FDF2F4`, rose `#E89BB0`, cerise `#A64264`, ink `#6E2B45`, ink-soft `#8A5669`, line `#EDCCD6`. Dark: ground `#1B0F15`, surface `#2A1821`, inset `#231420`, ink `#F7E5EA`, ink-soft `#C098AA`, rose `#EFA6BA`, cerise `#F57FA6`, line `#412833`.
 - **Type:** Cormorant Garamond (display — weight, streak, countdown), Jost (UI, body, labels), Caveat (sparingly). Never Nunito.
 - **A ticked box ties a bow** — the checked state is an SVG ribbon, not a checkmark.
 - **All copy French, tutoiement.** Decimal comma (`62,4`), thin-space thousands (`8 000`).
 - **Every animation respects `prefers-reduced-motion`,** degrading to a crossfade.
+- **Every text input sets `font-size: 16px` or larger.** The body scale is 0.95rem (~15.2px), and an input inheriting it makes iOS Safari zoom the page on focus — which on a one-handed checklist app reads as the layout jumping every time you tap a field.
+- **`--rose` is a fill, never text** (1.75:1 on the ground). `--cerise` is the text accent.
 - **Sound defaults off** (`settings.soundEnabled === false`).
 - **No rule logic in components.** Components call `@/domain/*`.
 
@@ -95,9 +97,9 @@ Identical to Plan 1's Global Constraints section — read it there; every item a
   --surface: #FFFBF7;
   --inset: #FDF2F4;
   --ink: #6E2B45;
-  --ink-soft: #9A6579;
+  --ink-soft: #8A5669;
   --rose: #E89BB0;
-  --cerise: #C2567A;
+  --cerise: #A64264;
   --line: #EDCCD6;
   --on-rose: #43131F;
 

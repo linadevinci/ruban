@@ -23,7 +23,7 @@ These apply to every task in every Ruban plan. Values are copied verbatim from t
 - **Defaults:** run days `[1,2,4,6,7]`, no-dinner days `[3,7]`, `runSessionsTarget` 5, `MIN_WEIGH_INS_FOR_AVERAGE` 3, `goalDate` `2026-11-12`.
 - **TypeScript is strict.** No `any`, no non-null assertions in domain code.
 - **UI language is French, tutoiement.** (Plans 2–3.)
-- **Palette:** ground `#F7E3E6`, surface `#FFFBF7`, inset `#FDF2F4`, rose `#E89BB0`, cerise `#C2567A`, ink `#6E2B45`, line `#EDCCD6`. Dark: ground `#1B0F15`, surface `#2A1821`, inset `#231420`, ink `#F7E5EA`, ink-soft `#C098AA`, rose `#EFA6BA`, cerise `#F57FA6`, line `#412833`. (Plan 2.)
+- **Palette:** ground `#F7E3E6`, surface `#FFFBF7`, inset `#FDF2F4`, rose `#E89BB0`, cerise `#A64264`, ink `#6E2B45`, line `#EDCCD6`. Dark: ground `#1B0F15`, surface `#2A1821`, inset `#231420`, ink `#F7E5EA`, ink-soft `#C098AA`, rose `#EFA6BA`, cerise `#F57FA6`, line `#412833`. (Plan 2.)
 - **Type:** Cormorant Garamond (display), Jost (UI/body/labels), Caveat (sparingly). (Plan 2.)
 - **Commit after every task.** Conventional Commit prefixes (`feat:`, `test:`, `chore:`).
 - **Type-check with `npx tsc -b`, never `npx tsc --noEmit`.** The root `tsconfig.json` is references-only (`files: []`), so `--noEmit` type-checks *nothing* and exits 0 on real errors. Verified on this project: a deliberate `const x: number = "nope"` passed `--noEmit` and failed `tsc -b` with exit 2.

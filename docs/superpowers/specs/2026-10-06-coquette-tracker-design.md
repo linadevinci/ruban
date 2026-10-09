@@ -227,7 +227,11 @@ Phase 1 reminders: *pas de dîner ce soir* on no-dinner evenings; an evening nud
 
 ## 10. Design system
 
-**Palette.** Coquette is dustier and warmer than candy pink, which is the trap that makes this genre read as a toy. Blush paper ground `#F7E3E6`, cream card surfaces `#FFFBF7`, rose primary `#E89BB0`, cerise `#C2567A` for emphasis, and — the decision that carries the most weight — body text in deep plum-brown `#6E2B45` rather than black. A dark theme in plum-black with the roses raised in chroma, because the checklist gets ticked at 23h in bed. Both themes are first-class.
+**Palette.** Coquette is dustier and warmer than candy pink, which is the trap that makes this genre read as a toy.
+
+**Two values were darkened for contrast, and the reason is a requirement, not a preference.** The first draft used ink-soft `#9A6579` and cerise `#C2567A`. Measured against WCAG, both failed AA for small text on the light grounds: ink-soft gave 3.79:1 on the blush ground and 4.25:1 on the inset, and cerise — which carries the gap readout, the floor warnings and every error message — gave 3.48:1 on the ground and 4.16:1 even on the cream surface. Cerise also fails as a *fill*: surface-coloured text on a `#C2567A` button is 4.16:1. The corrected values are **ink-soft `#8A5669`** (4.73 / 5.64 / 5.31 across ground, surface and inset) and **cerise `#A64264`** (4.77:1 as text on the ground, 5.69:1 under surface-coloured text). Both sit a step deeper in the same hue family. The dark theme needed no change — every token there clears 6.6:1.
+
+**`--rose` is a fill colour only and must never carry text.** At 1.75:1 against the ground it is unreadable as type. It is correct behind text (`--on-rose` on `--rose` is 7.21:1) and correct as a mark, and nowhere else. Blush paper ground `#F7E3E6`, cream card surfaces `#FFFBF7`, rose primary `#E89BB0`, cerise `#A64264` for emphasis, and — the decision that carries the most weight — body text in deep plum-brown `#6E2B45` rather than black. A dark theme in plum-black with the roses raised in chroma, because the checklist gets ticked at 23h in bed. Both themes are first-class.
 
 **Type.** Cormorant Garamond for display — the weight number, the streak count, the countdown — because a high-contrast serif at size reads as composed rather than cute. **Jost** for UI, body and labels: a geometric sans whose circular forms contrast with the serif instead of echoing it, and whose letterspaced small caps carry the uppercase labels. Caveat for handwritten notes, used perhaps three times in the entire app.
 
