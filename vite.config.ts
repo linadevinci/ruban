@@ -11,5 +11,9 @@ export default defineConfig({
   test: {
     environment: 'node',
     include: ['src/**/*.test.ts', 'src/**/*.test.tsx'],
+    // Pinned so the DST cases can actually fail. Without it the suite runs in
+    // whatever zone the machine is in, and a test named after the 25 October
+    // 2026 change proves nothing on a UTC runner.
+    env: { TZ: 'Europe/Paris' },
   },
 });

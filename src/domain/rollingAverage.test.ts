@@ -40,8 +40,18 @@ describe('rollingAverage', () => {
     expect(rollingAverage(data, '2026-10-06')).toBeCloseTo((62 + 63 + 62.5) / 3, 10);
   });
 
-  it('spans the 25 October 2026 DST change unchanged', () => {
-    const data = [w('2026-10-23', 61.8), w('2026-10-25', 61.6), w('2026-10-27', 61.4)];
-    expect(rollingAverage(data, '2026-10-27')).toBeCloseTo(61.6, 10);
+  it('keeps the window edge exact across the 29 March 2026 DST change', () => {
+    // The suite runs with TZ=Europe/Paris. 29 March 2026 is spring forward, so
+    // 2026-03-25 00:00 local to 2026-04-01 00:00 local is 167 hours, not 168.
+    // An age computed from local midnights would floor that to 6 and pull the
+    // 7-days-back weigh-in INSIDE the window. Measuring from UTC noon keeps
+    // it out, which is what makes the boundary exact.
+    const data = [
+      w('2026-03-25', 70),     // exactly 7 days back — must stay outside
+      w('2026-03-26', 63),     // 6 days back — inside
+      w('2026-03-31', 62.5),
+      w('2026-04-01', 62),
+    ];
+    expect(rollingAverage(data, '2026-04-01')).toBeCloseTo((63 + 62.5 + 62) / 3, 10);
   });
 });
