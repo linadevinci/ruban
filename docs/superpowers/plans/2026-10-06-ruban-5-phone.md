@@ -66,7 +66,7 @@ npm install -D workbox-build workbox-window
 ```svg
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
   <rect width="512" height="512" fill="#F7E3E6"/>
-  <g transform="translate(256 256) scale(14) translate(-12 -12)" fill="#C2567A">
+  <g transform="translate(256 256) scale(14) translate(-12 -12)" fill="#A64264">
     <path d="M12 12c-1.6-2.6-4-4.2-6.2-3.6C3.9 8.9 3 10.4 3 12s.9 3.1 2.8 3.6C8 16.2 10.4 14.6 12 12z"/>
     <path d="M12 12c1.6-2.6 4-4.2 6.2-3.6C20.1 8.9 21 10.4 21 12s-.9 3.1-2.8 3.6C16 16.2 13.6 14.6 12 12z"/>
     <circle cx="12" cy="12" r="1.9"/>
