@@ -17,15 +17,15 @@ body {
 img { max-width: 100%; }
 [hidden] { display: none !important; }
 
-:where(button, a, input, [tabindex]):focus-visible {
+:where(button, a, input, select, textarea, [tabindex]):focus-visible {
   outline: 2px solid var(--cerise);
   outline-offset: 2px;
   border-radius: 4px;
 }
 
 .app {
-  min-height: 100%;
-  padding-inline: 18px;
+  min-height: 100svh;
+  padding-inline: max(18px, env(safe-area-inset-left, 0px)) max(18px, env(safe-area-inset-right, 0px));
   padding-block: calc(env(safe-area-inset-top, 0px) + 16px)
                  calc(env(safe-area-inset-bottom, 0px) + 92px);
   max-width: 560px;
