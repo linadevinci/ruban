@@ -139,7 +139,7 @@ describe('evaluateChecklist', () => {
     expect(items.find((i) => i.id === 'calories')?.satisfied).toBe(false); // 1000 > 900
   });
 
-  it('derives steps and water from logged amounts, not from ticks', () => {
+  it('satisfies steps and water once the logged amounts reach their targets', () => {
     const items = evaluateChecklist(evaluation({
       log: log({ steps: 8200, waterGlasses: 6 }),
     }));

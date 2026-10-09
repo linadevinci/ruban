@@ -13,7 +13,7 @@ export interface JokerCheck {
   startDate: IsoDate;
   /** Coverage for `date`, if a row exists. Absent means nothing logged yet. */
   coverage: DayCoverage | undefined;
-  /** `jokerUsedOn` from the week plan of `date` own ISO week. */
+  /** `jokerUsedOn` from the week plan of `date`'s own ISO week. */
   weekPlanJokerUsedOn: IsoDate | null;
 }
 

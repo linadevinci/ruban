@@ -114,7 +114,7 @@ describe('canUseJoker', () => {
     expect(canUseJoker({ ...base, date: '2026-10-08', coverage: jokered('2026-10-08') })).toBe(false);
   });
 
-  it('refuses when that date own ISO week has already spent its joker', () => {
+  it("refuses when that date's own ISO week has already spent its joker", () => {
     expect(canUseJoker({ ...base, date: '2026-10-08', weekPlanJokerUsedOn: '2026-10-05' })).toBe(false);
   });
 
@@ -125,7 +125,7 @@ describe('canUseJoker', () => {
     })).toBe(false);
   });
 
-  it('allows yesterday across a week boundary, judged by that date own week', () => {
+  it("allows yesterday across a week boundary, judged by that date's own week", () => {
     // Monday 12 October; yesterday was Sunday 11 October, in 2026-W41.
     // W41 has not spent its joker even though W42 might have.
     expect(canUseJoker({
