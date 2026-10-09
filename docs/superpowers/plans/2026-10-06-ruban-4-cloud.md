@@ -1030,7 +1030,10 @@ git commit -m "feat: add the sync endpoint with SQL-enforced last-write-wins"
 - Produces:
   - `export type Transport = (request: SyncRequest) => Promise<SyncResponse>`
   - `syncOnce(transport: Transport): Promise<SyncOutcome>`
-  - `export interface SyncOutcome { pushed: number; pulled: number; skipped: number; cursor: string | null }`
+  - `export interface SyncOutcome { pushed: number; pulled: number; skipped: number; collisions: number; cursor: string | null }`
+  - `findByNaturalKey(table: SyncedTableName, row: Record<string, unknown>): Promise<{ id: string; updatedAt: string } | undefined>` — looks a row up by `[userId+date]` for `dayLogs`/`weights`, `[userId+isoWeek]` for `weekPlans`, and returns `undefined` for every other table, which has no natural-key constraint
+
+**New requirement, from Plan 1's hardening.** Plan 1 made `dayLogs`, `weights` and `weekPlans` **unique** on their natural key, which changes this endpoint's pull path: `put`ting a server row whose `(userId, date)` is already held locally under a *different* id now rejects with `ConstraintError` instead of silently creating a second row. The engine must catch that, resolve it by the same client-`updatedAt` rule, tombstone the loser, and count it. A test must cover it: seed a local row, pull a server row with the same natural key, a different id and a newer `updatedAt`, and assert the server row wins, the local one is tombstoned, and `collisions` is 1. Without this branch the outbox wedges on the first two-device collision — which is the failure spec §5 says is currently unresolved.
   - `httpTransport: Transport`
   - `useSyncStatus(): { pending: number; lastSyncAt: string | null; online: boolean }`
   - meta keys `SYNC_CURSOR_KEY`, `LAST_SYNC_KEY`
@@ -1249,6 +1252,9 @@ export interface SyncOutcome {
   pushed: number;
   pulled: number;
   skipped: number;
+  /** Natural-key collisions resolved during the pull. Non-zero means two
+   *  devices minted different ids for one logical row — see spec §5. */
+  collisions: number;
   cursor: string | null;
 }
 
@@ -1324,11 +1330,31 @@ export async function syncOnce(transport: Transport): Promise<SyncOutcome> {
         const id = row[key];
         if (typeof id !== 'string' || typeof row.updatedAt !== 'string') continue;
         const stored = await db[table].get(id as never) as { updatedAt?: string } | undefined;
-        if (shouldApply(stored?.updatedAt ?? null, row.updatedAt)) {
+        if (!shouldApply(stored?.updatedAt ?? null, row.updatedAt)) {
+          skipped += 1;
+          continue;
+        }
+        try {
           await db[table].put(row as never);
           pulled += 1;
-        } else {
-          skipped += 1;
+        } catch (error) {
+          // Plan 1 made dayLogs, weights and weekPlans UNIQUE on their natural
+          // key, so this put rejects when a *different* local id already holds
+          // that key — the two-device collision spec §5 records. Resolve it the
+          // same way as any other conflict, by client updatedAt, and tombstone
+          // the loser so the duplicate stops being resurrected.
+          if ((error as { name?: string }).name !== 'ConstraintError') throw error;
+          const rival = await findByNaturalKey(table, row);
+          if (rival && shouldApply(rival.updatedAt, row.updatedAt)) {
+            await db[table].update(rival.id as never, {
+              deletedAt: row.updatedAt, updatedAt: row.updatedAt,
+            });
+            await db[table].put(row as never);
+            pulled += 1;
+          } else {
+            skipped += 1;
+          }
+          collisions += 1;
         }
       }
     });

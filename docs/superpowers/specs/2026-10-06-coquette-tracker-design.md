@@ -58,7 +58,9 @@ A "day" is a local calendar date (`YYYY-MM-DD`). Weeks are ISO weeks beginning M
 
 Exactly one function converts an instant into a local date: `todayIn(tz)`, built on `Intl.DateTimeFormat` with the user's stored IANA timezone — never UTC, never the browser's ambient zone. Every other date operation is pure calendar arithmetic over `YYYY-MM-DD` strings, parsed at **UTC noon** so no shift can cross a date boundary. Timezones and DST therefore cannot reach the rest of the domain layer, which is why no date library is required.
 
-**European DST ends on Sunday 25 October 2026**, inside the goal window. That date gets explicit test cases in streak continuity and in reminder dispatch.
+**European DST ends on Sunday 25 October 2026**, inside the goal window, and begins again on Sunday 29 March. Both dates get test cases.
+
+**A correction worth carrying, found while hardening the tests:** 25 October is the *fall-back* transition, and a wrong implementation — one that parses dates at local midnight and floors the difference — still gets a 25-hour day right. So a test dated 25 October passes whether the code is correct or not, which is why six such cases sat in the suite proving nothing. **Spring forward is the direction that discriminates:** a 23-hour day is where local-midnight parsing rounds to zero and a day silently disappears. Date tests that mean to prove DST safety must use a spring-forward window (29 March 2026, 28 March 2027), and the suite must pin `TZ` to a zone that observes it — under the default `TZ` even a correct assertion cannot fail. The 25 October cases are kept as regression documentation, not as proof.
 
 ### 4.2 The checklist is day-aware
 
