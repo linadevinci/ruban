@@ -1,16 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import {
-  addDays, datesOfIsoWeek, diffDays, formatIsoDate, isoWeekOf,
+  addDays, datesOfIsoWeek, diffDays, formatUtcNoonDate, isoWeekOf,
   parseIsoDate, todayIn, weekdayOf,
 } from '@/domain/calendar';
 
-describe('parseIsoDate / formatIsoDate', () => {
+describe('parseIsoDate / formatUtcNoonDate', () => {
   it('parses at UTC noon so no shift crosses a date boundary', () => {
     expect(parseIsoDate('2026-10-06').toISOString()).toBe('2026-10-06T12:00:00.000Z');
   });
 
   it('round-trips', () => {
-    expect(formatIsoDate(parseIsoDate('2026-11-12'))).toBe('2026-11-12');
+    expect(formatUtcNoonDate(parseIsoDate('2026-11-12'))).toBe('2026-11-12');
   });
 });
 
@@ -53,6 +53,17 @@ describe('isoWeekOf', () => {
     expect(isoWeekOf('2025-12-29')).toBe('2026-W01');
     expect(isoWeekOf('2026-01-01')).toBe('2026-W01');
   });
+
+  it('numbers 2027, whose 1 January is a Friday, from week 1', () => {
+    // 1 January 2027 is a Friday, so it belongs to 2026-W53 and ISO week 1 of
+    // 2027 begins Monday 4 January. round(days / 7) + 1 made every 2027 week
+    // one too high.
+    expect(isoWeekOf('2026-12-31')).toBe('2026-W53');
+    expect(isoWeekOf('2027-01-01')).toBe('2026-W53');
+    expect(isoWeekOf('2027-01-04')).toBe('2027-W01');
+    expect(isoWeekOf('2027-12-31')).toBe('2027-W52');
+    expect(isoWeekOf('2028-01-01')).toBe('2027-W52');
+  });
 });
 
 describe('datesOfIsoWeek', () => {
@@ -67,6 +78,33 @@ describe('datesOfIsoWeek', () => {
     for (const d of datesOfIsoWeek('2026-W44')) {
       expect(isoWeekOf(d)).toBe('2026-W44');
     }
+  });
+
+  it('rejects a key that is not YYYY-Www instead of throwing from toISOString', () => {
+    expect(() => datesOfIsoWeek('garbage')).toThrow(/garbage/);
+    expect(() => datesOfIsoWeek('2026-W4')).toThrow(/2026-W4/);
+    expect(() => datesOfIsoWeek('2026-41')).toThrow(/2026-41/);
+  });
+
+  it('rejects a week number outside 1-53', () => {
+    expect(() => datesOfIsoWeek('2026-W00')).toThrow(/out of range/);
+    expect(() => datesOfIsoWeek('2026-W54')).toThrow(/out of range/);
+  });
+});
+
+describe('isoWeekOf and datesOfIsoWeek invert each other', () => {
+  it('holds for every date from 2026-01-01 to 2029-12-31', () => {
+    // A fixture table for one year cannot protect this: the broken week
+    // formula was right in 2026 and wrong for all 728 days of 2027-2028.
+    const span = diffDays('2026-01-01', '2029-12-31');
+    expect(span).toBe(1460); // a bounded loop: a broken addDays must not hang it
+    const failures: string[] = [];
+    for (let i = 0; i <= span; i += 1) {
+      const date = addDays('2026-01-01', i);
+      const week = isoWeekOf(date);
+      if (!datesOfIsoWeek(week).includes(date)) failures.push(`${date} -> ${week}`);
+    }
+    expect(failures).toEqual([]);
   });
 });
 
