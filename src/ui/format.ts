@@ -1,8 +1,8 @@
 import { parseIsoDate } from '@/domain/calendar';
 import type { IsoDate } from '@/domain/types';
 
-const NARROW_NBSP = ' ';
-const MINUS = '−';
+const NARROW_NBSP = '\u202F';
+const MINUS = '\u2212';
 
 export function kg(value: number): string {
   return value.toFixed(1).replace('.', ',');

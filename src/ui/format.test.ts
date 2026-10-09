@@ -23,9 +23,9 @@ describe('signedKg', () => {
 
 describe('kcal', () => {
   it('groups thousands with a narrow no-break space', () => {
-    expect(kcal(2400)).toBe('2 400');
+    expect(kcal(2400)).toBe('2\u202F400');
     expect(kcal(900)).toBe('900');
-    expect(kcal(-300)).toBe('−300');
+    expect(kcal(-300)).toBe('\u2212300');
   });
 });
 
