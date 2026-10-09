@@ -12,6 +12,34 @@
 
 **Depends on:** Plan 1 complete (`docs/superpowers/plans/2026-10-06-ruban-1-foundation.md`).
 
+## Required before the first screen reads the database
+
+Three items carried out of Plan 1's final review. All are latent there — Plan 1 has no
+runtime database consumer — and all become reachable the moment a screen opens Dexie.
+
+1. **A `version(2)` upgrade that de-duplicates, plus an open-failure path.** Plan 1 made
+   `dayLogs`, `weights` and `weekPlans` unique on their natural key *in place* under
+   `version(1)`. This was probed against real Dexie + fake-indexeddb: an existing database
+   holding two rows with the same `(userId, date)` **cannot be opened at all** — `db.open()`
+   rejects with `AbortError`/`ConstraintError`, and **bumping the version alone does not
+   help**, because IndexedDB cannot build a unique index over data that already violates it.
+   So add a `version(2)` whose `upgrade` merges duplicate `(userId, date)` and
+   `(userId, isoWeek)` rows by `updatedAt` *before* the unique index is declared, and give
+   `db.open()` a rejection handler that tells the user something recoverable rather than
+   rendering a blank screen. Nothing in `src/` handles an open rejection today.
+
+2. **Validate `settings.timezone` at its first read, and make `todayIn` fail loudly.**
+   `todayIn` throws `RangeError` on an invalid IANA zone, and its `?? ''` fallback returns a
+   malformed date such as `2026--06` if `formatToParts` ever omits a part rather than
+   throwing. Both belong with the first code that reads a stored timezone, which is this
+   plan.
+
+3. **`getDayLog` and `getOrCreateDayLog` disagree about tombstones.** The read-only accessor
+   returns `undefined` for a tombstoned row; the unchanged get-or-create pair returns that
+   tombstoned row as if it were live. Harmless until a sync pull can tombstone a day log —
+   which is Plan 4 — but this plan's screens use both, so decide deliberately which they
+   call rather than discovering the divergence later.
+
 ## Global Constraints
 
 Identical to Plan 1's Global Constraints section — read it there; every item applies here. The ones this plan exercises directly:

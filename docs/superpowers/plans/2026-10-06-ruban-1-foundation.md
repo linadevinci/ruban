@@ -228,7 +228,7 @@ git commit -m "feat: add domain types, defaults and the shared table list"
 - Consumes: `IsoDate`, `IsoWeek`, `Weekday` from `@/domain/types`.
 - Produces:
   - `parseIsoDate(d: IsoDate): Date` — UTC noon
-  - `formatIsoDate(dt: Date): IsoDate`
+  - `formatUtcNoonDate(dt: Date): IsoDate`
   - `addDays(d: IsoDate, n: number): IsoDate`
   - `diffDays(from: IsoDate, to: IsoDate): number`
   - `weekdayOf(d: IsoDate): Weekday`
@@ -241,17 +241,17 @@ git commit -m "feat: add domain types, defaults and the shared table list"
 ```ts
 import { describe, expect, it } from 'vitest';
 import {
-  addDays, datesOfIsoWeek, diffDays, formatIsoDate, isoWeekOf,
+  addDays, datesOfIsoWeek, diffDays, formatUtcNoonDate, isoWeekOf,
   parseIsoDate, todayIn, weekdayOf,
 } from '@/domain/calendar';
 
-describe('parseIsoDate / formatIsoDate', () => {
+describe('parseIsoDate / formatUtcNoonDate', () => {
   it('parses at UTC noon so no shift crosses a date boundary', () => {
     expect(parseIsoDate('2026-10-06').toISOString()).toBe('2026-10-06T12:00:00.000Z');
   });
 
   it('round-trips', () => {
-    expect(formatIsoDate(parseIsoDate('2026-11-12'))).toBe('2026-11-12');
+    expect(formatUtcNoonDate(parseIsoDate('2026-11-12'))).toBe('2026-11-12');
   });
 });
 
@@ -345,12 +345,12 @@ export function parseIsoDate(d: IsoDate): Date {
   return new Date(Date.UTC(y ?? 0, (m ?? 1) - 1, day ?? 1, 12));
 }
 
-export function formatIsoDate(dt: Date): IsoDate {
+export function formatUtcNoonDate(dt: Date): IsoDate {
   return dt.toISOString().slice(0, 10);
 }
 
 export function addDays(d: IsoDate, n: number): IsoDate {
-  return formatIsoDate(new Date(parseIsoDate(d).getTime() + n * DAY_MS));
+  return formatUtcNoonDate(new Date(parseIsoDate(d).getTime() + n * DAY_MS));
 }
 
 export function diffDays(from: IsoDate, to: IsoDate): number {
@@ -368,7 +368,16 @@ export function isoWeekOf(d: IsoDate): IsoWeek {
   dt.setUTCDate(dt.getUTCDate() + 4 - weekdayOf(d));
   const year = dt.getUTCFullYear();
   const jan1 = Date.UTC(year, 0, 1, 12);
-  const week = Math.round((dt.getTime() - jan1) / DAY_MS / 7) + 1;
+  const days = (dt.getTime() - jan1) / DAY_MS;
+  // ceil((days + 1) / 7), NOT round(days / 7) + 1. Let k be the day-of-year
+  // index of the ISO year's first Thursday; the Thursday of week N sits at
+  // k + 7(N-1), so round(days / 7) + 1 yields N + round(k / 7) — correct only
+  // while k <= 3. For k in {4, 5, 6}, i.e. whenever 1 January is a Friday,
+  // Saturday or Sunday (three years in seven), every week came out one too
+  // high and isoWeekOf stopped inverting datesOfIsoWeek. The original draft of
+  // this plan shipped the round form; it survived eleven task reviews because
+  // every fixture here lives in 2026, which begins on a Thursday (k = 3).
+  const week = Math.ceil((days + 1) / 7);
   return `${year}-W${String(week).padStart(2, '0')}`;
 }
 
@@ -378,10 +387,10 @@ export function datesOfIsoWeek(w: IsoWeek): IsoDate[] {
   const week = Number(weekPart);
   // 4 January is always in ISO week 1.
   const jan4 = Date.UTC(year, 0, 4, 12);
-  const jan4Weekday = weekdayOf(formatIsoDate(new Date(jan4)));
+  const jan4Weekday = weekdayOf(formatUtcNoonDate(new Date(jan4)));
   const week1Monday = jan4 - (jan4Weekday - 1) * DAY_MS;
   const monday = week1Monday + (week - 1) * 7 * DAY_MS;
-  return Array.from({ length: 7 }, (_, i) => formatIsoDate(new Date(monday + i * DAY_MS)));
+  return Array.from({ length: 7 }, (_, i) => formatUtcNoonDate(new Date(monday + i * DAY_MS)));
 }
 
 /** The only function in the codebase that turns an instant into a date. */

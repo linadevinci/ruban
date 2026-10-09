@@ -19,6 +19,14 @@ Plan 1's Global Constraints apply in full. Added here:
 - **`bcryptjs`, not `bcrypt`.** Cost 12, per spec §8.
 - **Cursors use server time; last-write-wins uses client time** (spec §7). Realised by a `serverUpdatedAt` column that **only the database ever writes**: pulls filter on it, merges compare the client's `updatedAt`. This is what makes "a skewed phone clock must never cause a row to be *missed*" actually true.
 - **Nothing is ever hard-deleted.** Tombstones sync like any other change.
+- **A tombstoned `dayLogs` or `weekPlans` row needs a resurrect path, and this plan is where
+  it becomes reachable.** `softDelete`'s table union excludes both, and `updateDayLog`'s
+  patch type omits `deletedAt`, so neither can be tombstoned locally — but a pull can
+  tombstone either. Once that happens the unique natural-key index forbids creating a fresh
+  row for that date, and `updateDayLog` would write to a row every read filters out: the
+  user's ticks would silently vanish. Define the behaviour explicitly — the straightforward
+  answer is that applying a local write to a tombstoned natural key clears `deletedAt` on
+  the existing row rather than inserting a new one — and test it.
 - **Conflicts are per record, not per field.**
 - **Auth never gates launching the app** (spec §8). The cookie is checked on sync, never on boot.
 - **Secrets live in Vercel environment variables**, never in the repo: `DATABASE_URL`, `JWT_SECRET`, `CRON_SECRET`, `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`. `.env*` is already git-ignored.
