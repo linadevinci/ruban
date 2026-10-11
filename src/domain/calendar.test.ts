@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
-  addDays, datesOfIsoWeek, diffDays, formatUtcNoonDate, isoWeekOf,
+  addDays, datesOfIsoWeek, diffDays, formatUtcNoonDate, isoWeekOf, isValidTimeZone,
   parseIsoDate, todayIn, weekdayOf,
 } from '@/domain/calendar';
 
@@ -120,5 +120,27 @@ describe('todayIn', () => {
     // Paris is UTC+2 before 01:00 UTC that day and UTC+1 after.
     expect(todayIn('Europe/Paris', new Date('2026-10-24T23:30:00Z'))).toBe('2026-10-25');
     expect(todayIn('Europe/Paris', new Date('2026-10-25T23:30:00Z'))).toBe('2026-10-26');
+  });
+
+  describe('when the formatter omits a part', () => {
+    afterEach(() => { vi.unstubAllGlobals(); });
+
+    it('throws rather than returning a malformed date', () => {
+      const RealFormat = Intl.DateTimeFormat;
+      class NoDayFormat extends RealFormat {
+        override formatToParts(date?: Date | number): Intl.DateTimeFormatPart[] {
+          return super.formatToParts(date).filter((p) => p.type !== 'day');
+        }
+      }
+      vi.stubGlobal('Intl', { ...Intl, DateTimeFormat: NoDayFormat });
+      expect(() => todayIn('UTC', new Date('2026-07-14T12:00:00Z'))).toThrow(/day/);
+    });
+  });
+});
+
+describe('isValidTimeZone', () => {
+  it('accepts a real zone and rejects an unknown one', () => {
+    expect(isValidTimeZone('Europe/Paris')).toBe(true);
+    expect(isValidTimeZone('Not/AZone')).toBe(false);
   });
 });

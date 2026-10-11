@@ -68,12 +68,28 @@ export function datesOfIsoWeek(w: IsoWeek): IsoDate[] {
   return Array.from({ length: 7 }, (_, i) => formatUtcNoonDate(new Date(monday + i * DAY_MS)));
 }
 
+/** True when the runtime's Intl accepts `tz` as a time zone. */
+export function isValidTimeZone(tz: string): boolean {
+  try {
+    new Intl.DateTimeFormat('en-CA', { timeZone: tz });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** The only function in the codebase that turns an instant into a date. */
 export function todayIn(tz: string, now: Date = new Date()): IsoDate {
   // Read the parts by type rather than trusting a locale's layout.
   const parts = new Intl.DateTimeFormat('en-CA', {
     timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
   }).formatToParts(now);
-  const part = (type: string) => parts.find((p) => p.type === type)?.value ?? '';
+  // A missing part would yield a malformed date that flows into every
+  // comparison, so fail loudly instead.
+  const part = (type: string): string => {
+    const value = parts.find((p) => p.type === type)?.value;
+    if (value === undefined) throw new Error(`Intl omitted the "${type}" part for ${tz}`);
+    return value;
+  };
   return `${part('year')}-${part('month')}-${part('day')}`;
 }
