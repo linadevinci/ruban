@@ -1,7 +1,7 @@
 import 'fake-indexeddb/auto';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { newId, nowIso } from '@/db/ids';
-import { db } from '@/db/schema';
+import { db, openDatabase } from '@/db/schema';
 import { enqueue } from '@/db/outbox';
 
 beforeEach(async () => {
@@ -109,5 +109,31 @@ describe('enqueue', () => {
     expect(payload?.id).toBe('b');
     expect(payload?.deletedAt).toBe(deletedAt);
     expect(payload?.deletedAt).not.toBeNull();
+  });
+});
+
+describe('openDatabase', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('opens a fresh database', async () => {
+    expect(await openDatabase()).toEqual({ ok: true });
+  });
+
+  it('reports a SecurityError as blocked, keeping the error', async () => {
+    const error = { name: 'SecurityError', message: 'denied' };
+    vi.spyOn(db, 'open').mockRejectedValue(error);
+    const result = await openDatabase();
+    expect(result).toEqual({ ok: false, reason: 'blocked', error });
+    if (!result.ok) expect(result.error).toBe(error);
+  });
+
+  it('reports a plain Error as unknown, keeping the error', async () => {
+    const error = new Error('boom');
+    vi.spyOn(db, 'open').mockRejectedValue(error);
+    const result = await openDatabase();
+    expect(result).toEqual({ ok: false, reason: 'unknown', error });
+    if (!result.ok) expect(result.error).toBe(error);
   });
 });

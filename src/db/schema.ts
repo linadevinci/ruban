@@ -53,3 +53,26 @@ export class RubanDb extends Dexie {
 }
 
 export const db = new RubanDb();
+
+export type OpenResult =
+  | { ok: true }
+  | { ok: false; reason: 'blocked' | 'unknown'; error: unknown };
+
+/**
+ * Opens the database without throwing. db.open() can reject for reasons that have
+ * nothing to do with the data: private browsing with site data blocked, a quota
+ * refusal, a corrupted store. The first screen to open the database must be able
+ * to say something to the user instead of rendering blank.
+ */
+export async function openDatabase(): Promise<OpenResult> {
+  try {
+    await db.open();
+    return { ok: true };
+  } catch (error) {
+    const name = (error as { name?: string }).name;
+    const reason = name === 'SecurityError' || name === 'QuotaExceededError'
+      ? 'blocked'
+      : 'unknown';
+    return { ok: false, reason, error };
+  }
+}
