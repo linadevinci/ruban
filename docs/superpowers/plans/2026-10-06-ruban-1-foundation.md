@@ -255,6 +255,18 @@ describe('parseIsoDate / formatUtcNoonDate', () => {
   });
 });
 
+describe('parseIsoDate rejects malformed input', () => {
+  it('throws rather than inventing a date', () => {
+    // '' used to yield 1900-01-01: the split gave [0], the nullish fallbacks
+    // filled the rest, and Date.UTC maps year 0 to 1900. Downstream figures
+    // then looked plausible and were meaningless.
+    expect(() => parseIsoDate('')).toThrow(/Not an ISO date/);
+    expect(() => parseIsoDate('garbage')).toThrow(/Not an ISO date/);
+    expect(() => parseIsoDate('2026-10')).toThrow(/Not an ISO date/);
+    expect(() => parseIsoDate('2026-1-1')).toThrow(/Not an ISO date/);
+  });
+});
+
 describe('weekdayOf', () => {
   it('uses ISO numbering with Monday as 1', () => {
     expect(weekdayOf('2026-10-05')).toBe(1); // Monday
@@ -339,10 +351,23 @@ import type { IsoDate, IsoWeek, Weekday } from './types';
 
 const DAY_MS = 86_400_000;
 
-/** Parsed at UTC noon: a ±12h shift can never land on another calendar date. */
+const ISO_DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+/**
+ * Parsed at UTC noon: a +/-12h shift can never land on another calendar date.
+ *
+ * Throws on anything malformed. The nullish fallbacks this once used were there
+ * to satisfy noUncheckedIndexedAccess, and they silently invented a date:
+ * parseIsoDate('') gave [0] from the split, filled the rest with 1, and
+ * Date.UTC(0, 0, 1, 12) maps year 0 to 1900 - so an empty date became
+ * 1900-01-01 and every downstream figure looked plausible and was meaningless.
+ * An empty goal date showed "0,0 kg par semaine" and a countdown of J-46304.
+ */
 export function parseIsoDate(d: IsoDate): Date {
-  const [y, m, day] = d.split('-').map(Number);
-  return new Date(Date.UTC(y ?? 0, (m ?? 1) - 1, day ?? 1, 12));
+  const match = ISO_DATE_PATTERN.exec(d);
+  if (!match) throw new Error(`Not an ISO date (expected YYYY-MM-DD): ${JSON.stringify(d)}`);
+  const [, y, m, day] = match;
+  return new Date(Date.UTC(Number(y), Number(m) - 1, Number(day), 12));
 }
 
 export function formatUtcNoonDate(dt: Date): IsoDate {
