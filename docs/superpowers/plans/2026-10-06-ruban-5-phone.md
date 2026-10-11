@@ -15,6 +15,22 @@
 ## Global Constraints
 
 Plan 1's Global Constraints apply in full. Added here:
+- **The escape rule, as sharpened during Plan 2:** escape the characters that look like an ASCII neighbour (U+202F, U+00A0, U+2212, U+2014, U+2019, U+2026, U+00B7); write accented letters literally (`départ`, not an escape), because they are visibly distinct and cannot be silently substituted. Code comments stay ASCII. Plan 2's Global Constraints carry the full statement.
+
+
+**Pre-flight, before any task here is dispatched: this plan's code blocks contain literal
+confusable characters and they must become `\u` escapes.** A scan counted 17 such lines,
+listed at the end of this paragraph. Most are the French right single quote U+2019 in UI strings
+(`l’écran`, `c’est`), which renders identically to an ASCII apostrophe and is one careless edit
+away from becoming one. **This cannot be done with a bulk search and replace**, because the right
+fix depends on context: inside a string or template literal the escape works on its own, but in
+JSX *text* it does not — there it must be wrapped in braces as an expression, and a blind
+rewrite would emit a literal backslash-u into the rendered page. Em dashes and ellipses inside
+code *comments* take plain ASCII rather than an escape, since comments stay ASCII and an escape
+in a comment just reads as noise. Work through these by hand at pre-flight.
+
+Lines: 310, 314, 371, 372, 373, 379, 380, 384, 385, 853, 985, 1081, 1082, 1099, 1100, 1116, 1140
+
 
 - **Hourly polling, not a scheduled time.** GitHub Actions crons are UTC-only with no DST awareness, so a fixed time silently shifts by an hour on **25 October 2026**. The endpoint does the timezone thinking.
 - **At-most-once delivery.** `sent_reminders` is claimed *before* the push is sent, unique on `(userId, date, kind)`.

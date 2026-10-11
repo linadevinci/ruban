@@ -15,6 +15,22 @@
 ## Global Constraints
 
 Plan 1's Global Constraints apply in full. The ones this plan turns on:
+- **The escape rule, as sharpened during Plan 2:** escape the characters that look like an ASCII neighbour (U+202F, U+00A0, U+2212, U+2014, U+2019, U+2026, U+00B7); write accented letters literally (`départ`, not an escape), because they are visibly distinct and cannot be silently substituted. Code comments stay ASCII. Plan 2's Global Constraints carry the full statement.
+
+
+**Pre-flight, before any task here is dispatched: this plan's code blocks contain literal
+confusable characters and they must become `\u` escapes.** A scan counted 17 such lines,
+listed at the end of this paragraph. Most are the French right single quote U+2019 in UI strings
+(`l’écran`, `c’est`), which renders identically to an ASCII apostrophe and is one careless edit
+away from becoming one. **This cannot be done with a bulk search and replace**, because the right
+fix depends on context: inside a string or template literal the escape works on its own, but in
+JSX *text* it does not — there it must be wrapped in braces as an expression, and a blind
+rewrite would emit a literal backslash-u into the rendered page. Em dashes and ellipses inside
+code *comments* take plain ASCII rather than an escape, since comments stay ASCII and an escape
+in a comment just reads as noise. Work through these by hand at pre-flight.
+
+Lines: 427, 467, 674, 805, 823, 838, 1264, 1631, 1678, 1680, 1738, 1739, 1944, 2253, 2466, 2477, 2497
+
 
 - **Colour carries no meaning in any chart** (spec §10). Raw weigh-ins = hollow cerise circles; rolling average = 2px solid cerise line (same entity, same colour, deliberately); trajectory = 2px dashed muted-ink reference line, direct-labelled. No legend box.
 - **Never a dual-axis chart.** Pace and weekly distance are two separate charts.
