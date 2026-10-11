@@ -31,6 +31,7 @@ Plan 1's Global Constraints apply in full. Added here:
 - **Auth never gates launching the app** (spec §8). The cookie is checked on sync, never on boot.
 - **Secrets live in Vercel environment variables**, never in the repo: `DATABASE_URL`, `JWT_SECRET`, `CRON_SECRET`, `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`. `.env*` is already git-ignored.
 - **The deployment URL is public** — Hobby has no password protection — so the login backoff is a requirement, not ceremony.
+- **Validate dates arriving from the server, or a corrupt row blanks a screen.** Plan 2 made `parseIsoDate` strict: it throws on anything that is not a real `YYYY-MM-DD`. Onboarding validates what the user types, but **this plan is the other way dates get in**, and the pull path writes rows straight into Dexie. A single bad `goalDate`, `date` or `isoWeek` — from a partial write, a hand-edited row, or a future server bug — then throws during render wherever it is read, and the screen goes white with an unhandled error. Two earlier findings on this project turned out to be exactly this failure, so it is not hypothetical. Use `isIsoDate` from `@/domain/calendar` to reject or quarantine a row whose date fields are malformed, rather than applying it and discovering the problem at render time.
 
 ---
 

@@ -1047,7 +1047,7 @@ Fields, with defaults: poids de départ (empty), objectif (empty), date objectif
 
 - [ ] **Step 1: Write the failing test**
 
-These five cases are the versions that actually shipped, after Task 6's implementer found three defects in the originals: `/par semaine/` also matched the "Sorties par semaine" label and threw on multiple matches; the `onDone` assertion ran before the IndexedDB write landed, so it needed `waitFor`; and "refuses to submit" would have passed vacuously, before the guard could even run, until it waited on the error message first. The fifth case — the UTC fallback — was added because without it, deleting the fallback failed no test. Note how it stubs **only** the no-argument detection call and lets real formatter calls through; a blanket stub would break `todayIn` and `longDate` inside the same render.
+These cases are copied verbatim from the shipped `Onboarding.test.tsx`, not re-written by hand — an earlier hand-written back-port drifted from the real file, which is how the plan briefly lost the `isValidTimeZone` fallback. They are the versions that actually shipped, after Task 6's implementer found three defects in the originals: `/par semaine/` also matched the "Sorties par semaine" label and threw on multiple matches; the `onDone` assertion ran before the IndexedDB write landed, so it needed `waitFor`; and "refuses to submit" would have passed vacuously, before the guard could even run, until it waited on the error message first. The fifth case — the UTC fallback — was added because without it, deleting the fallback failed no test. Note how it stubs **only** the no-argument detection call and lets real formatter calls through; a blanket stub would break `todayIn` and `longDate` inside the same render.
 
 ```ts
 import 'fake-indexeddb/auto';
@@ -1123,6 +1123,7 @@ describe('Onboarding', () => {
 
     await userEvent.type(screen.getByLabelText('Cible calories'), 'abc');
     await userEvent.click(screen.getByRole('button', { name: 'Commencer' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(/objectifs/);
     expect(await db.settings.count()).toBe(0);
   });
 
@@ -1136,16 +1137,14 @@ describe('Onboarding', () => {
     expect(await db.settings.count()).toBe(0);
   });
 
-  it('survives a date the browser can emit but parseIsoDate rejects', async () => {
+  it('survives a five-digit year in the date field and refuses to submit it', async () => {
     render(<Onboarding onDone={() => {}} />);
     await userEvent.type(screen.getByLabelText('Poids de départ'), '66');
     await userEvent.type(screen.getByLabelText('Objectif'), '62.3');
-    // A type="date" field accepts more than four year digits in some browsers.
-    // Before isIsoDate guarded it, this threw during render and blanked the page.
-    fireEvent.change(screen.getByLabelText('Date objectif'), {
-      target: { value: '12026-01-01' },
-    });
-    expect(screen.getByLabelText('Poids de départ')).toBeInTheDocument();
+    // userEvent will not type an invalid date value into a date input.
+    fireEvent.change(screen.getByLabelText('Date objectif'), { target: { value: '12026-01-01' } });
+    // Still rendered: a throw during render would have removed the form.
+    expect(screen.getByRole('button', { name: 'Commencer' })).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: 'Commencer' }));
     expect(await screen.findByRole('alert')).toHaveTextContent(/date objectif/);
     expect(await db.settings.count()).toBe(0);
