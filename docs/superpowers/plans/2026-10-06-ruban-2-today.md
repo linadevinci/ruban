@@ -1047,12 +1047,15 @@ Fields, with defaults: poids de départ (empty), objectif (empty), date objectif
 
 - [ ] **Step 1: Write the failing test**
 
+These five cases are the versions that actually shipped, after Task 6's implementer found three defects in the originals: `/par semaine/` also matched the "Sorties par semaine" label and threw on multiple matches; the `onDone` assertion ran before the IndexedDB write landed, so it needed `waitFor`; and "refuses to submit" would have passed vacuously, before the guard could even run, until it waited on the error message first. The fifth case — the UTC fallback — was added because without it, deleting the fallback failed no test. Note how it stubs **only** the no-argument detection call and lets real formatter calls through; a blanket stub would break `todayIn` and `longDate` inside the same render.
+
 ```ts
 import 'fake-indexeddb/auto';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { db } from '@/db/schema';
+import { isValidTimeZone } from '@/domain/calendar';
 import { Onboarding } from '@/features/onboarding/Onboarding';
 
 beforeEach(async () => {
@@ -1066,13 +1069,16 @@ describe('Onboarding', () => {
     render(<Onboarding onDone={() => {}} />);
     await userEvent.type(screen.getByLabelText('Poids de départ'), '66');
     await userEvent.type(screen.getByLabelText('Objectif'), '62.3');
-    expect(await screen.findByText(/par semaine/)).toBeInTheDocument();
+    expect(await screen.findByText(/kg par semaine/)).toBeInTheDocument();
   });
 
   it('refuses to submit without both weights', async () => {
     const onDone = vi.fn();
     render(<Onboarding onDone={onDone} />);
     await userEvent.click(screen.getByRole('button', { name: 'Commencer' }));
+    // The message proves submit ran and took the guard; without it the
+    // assertions below would pass before any async write could land.
+    expect(await screen.findByText(/poids de départ et ton objectif/)).toBeInTheDocument();
     expect(onDone).not.toHaveBeenCalled();
     expect(await db.settings.count()).toBe(0);
   });
@@ -1084,7 +1090,7 @@ describe('Onboarding', () => {
     await userEvent.type(screen.getByLabelText('Objectif'), '62.3');
     await userEvent.click(screen.getByRole('button', { name: 'Commencer' }));
 
-    expect(onDone).toHaveBeenCalled();
+    await waitFor(() => expect(onDone).toHaveBeenCalled());
     const settings = (await db.settings.toArray())[0];
     expect(settings?.startWeight).toBe(66);
     expect(settings?.targetWeight).toBe(62.3);
@@ -1094,6 +1100,7 @@ describe('Onboarding', () => {
     expect(settings?.runSessionsTarget).toBe(5);
     expect(settings?.soundEnabled).toBe(false);
     expect(settings?.timezone.length).toBeGreaterThan(0);
+    expect(isValidTimeZone(settings?.timezone ?? '')).toBe(true);
   });
 
   it('accepts a decimal comma as well as a point', async () => {
@@ -1101,7 +1108,32 @@ describe('Onboarding', () => {
     await userEvent.type(screen.getByLabelText('Poids de départ'), '66,5');
     await userEvent.type(screen.getByLabelText('Objectif'), '62,3');
     await userEvent.click(screen.getByRole('button', { name: 'Commencer' }));
+    await waitFor(async () => expect(await db.settings.count()).toBe(1));
     expect((await db.settings.toArray())[0]?.startWeight).toBe(66.5);
+  });
+
+  it('falls back to UTC when the detected zone is unusable', async () => {
+    const RealFormat = Intl.DateTimeFormat;
+    const spy = vi.spyOn(Intl, 'DateTimeFormat').mockImplementation(function (
+      this: unknown, locale?: string | string[], options?: Intl.DateTimeFormatOptions,
+    ) {
+      const real = new RealFormat(locale, options);
+      // Only the no-argument detection call is lied to; real calls pass through.
+      if (locale === undefined && options === undefined) {
+        return { resolvedOptions: () => ({ ...real.resolvedOptions(), timeZone: 'Not/AZone' }) } as Intl.DateTimeFormat;
+      }
+      return real;
+    } as unknown as typeof Intl.DateTimeFormat);
+    try {
+      render(<Onboarding onDone={() => {}} />);
+      await userEvent.type(screen.getByLabelText('Poids de départ'), '66');
+      await userEvent.type(screen.getByLabelText('Objectif'), '62');
+      await userEvent.click(screen.getByRole('button', { name: 'Commencer' }));
+      await waitFor(async () => expect(await db.settings.count()).toBe(1));
+    } finally {
+      spy.mockRestore();
+    }
+    expect((await db.settings.toArray())[0]?.timezone).toBe('UTC');
   });
 });
 ```
