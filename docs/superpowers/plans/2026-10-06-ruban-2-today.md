@@ -642,9 +642,19 @@ describe('Stepper', () => {
     expect(onChange).not.toHaveBeenCalled();
   });
 
-  it('shows the current value', () => {
-    render(<Stepper label="Eau" value={3} min={0} max={10} step={1} onChange={() => {}} />);
-    expect(screen.getByText('3')).toBeInTheDocument();
+  it('shows the current value, and updates when it changes', () => {
+    // Two distinct values, neither equal to min, max or step. A single
+    // assertion at value={3} passes against a hardcoded 3 — and against a
+    // render of step, which is also 1 away. Re-rendering is what makes this
+    // discriminate.
+    const { rerender } = render(
+      <Stepper label="Eau" value={7} min={0} max={10} step={1} onChange={() => {}} />,
+    );
+    expect(screen.getByText('7')).toBeInTheDocument();
+
+    rerender(<Stepper label="Eau" value={2} min={0} max={10} step={1} onChange={() => {}} />);
+    expect(screen.getByText('2')).toBeInTheDocument();
+    expect(screen.queryByText('7')).not.toBeInTheDocument();
   });
 });
 ```
@@ -1881,7 +1891,7 @@ export function StreakCard({
           <span className="label">{plural(streak, 'jour', 'jours')} d'affilée</span>
         </div>
         <span data-testid="countdown">
-          <Pill>J−{daysLeft}</Pill>
+          <Pill>{`J\u2212${daysLeft}`}</Pill>
         </span>
       </div>
       {jokerAvailable && (
