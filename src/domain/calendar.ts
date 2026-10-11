@@ -9,7 +9,22 @@ export function parseIsoDate(d: IsoDate): Date {
     throw new Error(`Not an ISO date (expected YYYY-MM-DD): ${JSON.stringify(d)}`);
   }
   const [, y, m, day] = match;
-  return new Date(Date.UTC(Number(y), Number(m) - 1, Number(day), 12));
+  const date = new Date(Date.UTC(Number(y), Number(m) - 1, Number(day), 12));
+  // Date.UTC rolls 2026-02-31 over to 2026-03-03; a round trip catches that.
+  if (formatUtcNoonDate(date) !== d) {
+    throw new Error(`Not a real calendar date: ${JSON.stringify(d)}`);
+  }
+  return date;
+}
+
+/** True when `d` is a real YYYY-MM-DD date; use this to validate user text. */
+export function isIsoDate(d: string): boolean {
+  try {
+    parseIsoDate(d);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**

@@ -1,5 +1,5 @@
 import 'fake-indexeddb/auto';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { db } from '@/db/schema';
@@ -80,6 +80,19 @@ describe('Onboarding', () => {
     await userEvent.type(screen.getByLabelText('Poids de départ'), '66');
     await userEvent.type(screen.getByLabelText('Objectif'), '62.3');
     await userEvent.clear(screen.getByLabelText('Date objectif'));
+    await userEvent.click(screen.getByRole('button', { name: 'Commencer' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(/date objectif/);
+    expect(await db.settings.count()).toBe(0);
+  });
+
+  it('survives a five-digit year in the date field and refuses to submit it', async () => {
+    render(<Onboarding onDone={() => {}} />);
+    await userEvent.type(screen.getByLabelText('Poids de départ'), '66');
+    await userEvent.type(screen.getByLabelText('Objectif'), '62.3');
+    // userEvent will not type an invalid date value into a date input.
+    fireEvent.change(screen.getByLabelText('Date objectif'), { target: { value: '12026-01-01' } });
+    // Still rendered: a throw during render would have removed the form.
+    expect(screen.getByRole('button', { name: 'Commencer' })).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: 'Commencer' }));
     expect(await screen.findByRole('alert')).toHaveTextContent(/date objectif/);
     expect(await db.settings.count()).toBe(0);

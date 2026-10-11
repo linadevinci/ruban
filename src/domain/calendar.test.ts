@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
-  addDays, datesOfIsoWeek, diffDays, formatUtcNoonDate, isoWeekOf, isValidTimeZone,
+  addDays, datesOfIsoWeek, diffDays, formatUtcNoonDate, isIsoDate, isoWeekOf, isValidTimeZone,
   parseIsoDate, todayIn, weekdayOf,
 } from '@/domain/calendar';
 
@@ -142,6 +142,25 @@ describe('todayIn', () => {
       expect(() => todayIn('UTC', new Date('2026-07-14T12:00:00Z'))).toThrow(/day/);
     } finally {
       spy.mockRestore();
+    }
+  });
+});
+
+describe('parseIsoDate real-date check', () => {
+  it('rejects dates that are well-formed but not real, and keeps genuine leap days', () => {
+    for (const bad of ['2026-02-31', '2026-13-01', '2026-00-10', '2027-02-29']) {
+      expect(() => parseIsoDate(bad), bad).toThrow(/Not a real calendar date/);
+    }
+    expect(formatUtcNoonDate(parseIsoDate('2028-02-29'))).toBe('2028-02-29');
+  });
+});
+
+describe('isIsoDate', () => {
+  it('accepts real dates and rejects empty, five-digit-year and unreal ones', () => {
+    expect(isIsoDate('2026-11-12')).toBe(true);
+    expect(isIsoDate('2028-02-29')).toBe(true);
+    for (const bad of ['', '12026-01-01', '2026-02-31']) {
+      expect(isIsoDate(bad), bad).toBe(false);
     }
   });
 });

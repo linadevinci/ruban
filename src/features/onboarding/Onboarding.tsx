@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { ensureLocalUser } from '@/app/session';
 import { saveSettings } from '@/db/repos';
-import { diffDays, isValidTimeZone, todayIn } from '@/domain/calendar';
+import { diffDays, isIsoDate, isValidTimeZone, todayIn } from '@/domain/calendar';
 import { impliedWeeklyRate } from '@/domain/trajectory';
 import { Button } from '@/ui/Button';
 import { kg } from '@/ui/format';
@@ -56,8 +56,9 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
   const startDate = todayIn(timezone);
 
   // Guarded on goalDate too: parseIsoDate throws on a malformed date, so an
-  // emptied date field would otherwise blank the screen during render.
-  const rate = start !== null && target !== null && goalDate !== ''
+  // emptied or fumbled date field (a date input can emit a 5-digit year) would
+  // otherwise blank the screen during render.
+  const rate = start !== null && target !== null && isIsoDate(goalDate)
     ? impliedWeeklyRate({ startDate, startWeight: start, targetWeight: target, goalDate })
     : null;
 
@@ -67,7 +68,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
       setError('Il me faut ton poids de départ et ton objectif.');
       return;
     }
-    if (goalDate === '' || diffDays(startDate, goalDate) <= 0) {
+    if (!isIsoDate(goalDate) || diffDays(startDate, goalDate) <= 0) {
       setError('Il me faut une date objectif, après aujourd\u2019hui.');
       return;
     }
