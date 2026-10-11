@@ -37,10 +37,12 @@ Lines: 589, 1000, 1089, 1146, 1270, 1357, 1503, 1516, 1527, 1536, 1571, 1574, 15
 - **Nothing is ever hard-deleted.** Tombstones sync like any other change.
 - **A tombstoned `dayLogs` or `weekPlans` row needs a resurrect path, and this plan is where
   it becomes reachable.** Note what Task 7 of Plan 2 already does and does not solve: its
-  `liveDayLog` helper stops a tombstoned row being *displayed* as today's log, but the
-  placeholder it substitutes **keeps the tombstoned row's id**, so a subsequent tick still
-  writes through `getOrCreateDayLog` to the invisible row. The read is guarded; the write is
-  not. Whatever resurrect rule this plan settles on has to cover the write path too, or a
+  read path is guarded — it reads with the read-only `getDayLog`, which filters tombstones,
+  and substitutes a placeholder built from scratch, so no dead row's id is inherited. **The write
+  path is still unguarded**: `updateDayLog` finds the row by `[userId+date]` with no `deletedAt`
+  filter and its patch type excludes `deletedAt`, so a tick on a tombstoned day spreads over a
+  base whose `deletedAt` is non-null and is then filtered straight back out of every read. The
+  tick vanishes silently; the screen merely looks consistently unlogged while it happens. Whatever resurrect rule this plan settles on has to cover the write path too, or a
   user's ticks will land somewhere no screen ever shows them. `softDelete`'s table union excludes both, and `updateDayLog`'s
   patch type omits `deletedAt`, so neither can be tombstoned locally — but a pull can
   tombstone either. Once that happens the unique natural-key index forbids creating a fresh

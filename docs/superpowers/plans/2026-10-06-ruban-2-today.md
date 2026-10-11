@@ -57,6 +57,9 @@ runtime database consumer — and all become reachable the moment a screen opens
 
 ## Global Constraints
 
+- **Never call a `getOrCreate*` repo function inside a `useLiveQuery` querier, or inside anything a querier awaits.** Every `getOrCreate*` opens `db.transaction('rw', ...)`, and Dexie's observability middleware throws `ReadOnlyError: Readwrite transaction in liveQuery context` on any non-readonly transaction in a querier — unconditionally, even when the row already exists and nothing would actually be written. The querier rejects, `useLiveQuery` stays `undefined` forever, and the screen never renders. **This is not theoretical: it shipped in Task 7 and made the Today screen unrenderable while 209 tests passed**, because every test exercised the pure view model and none exercised the hook. Read with the read-only accessor (`getDayLog`, `getWeekPlan`), resolve display defaults through a pure function, and let the `update*` form create the row on the first real edit — all of them already do `existing ?? newRow`.
+  There is a second, independent reason, which Plan 3 states for the week planner and which I failed to carry back here: a reactive read that writes to the table it observes invents data nobody entered, and queues a sync push for a row the user never touched. Merely opening the app should not be a syncable event.
+  **Any screen with a `useLiveQuery` needs at least one test that renders the hook and asserts a defined result.** Testing the pure view model alone cannot catch this class of failure.
 Identical to Plan 1's Global Constraints section — read it there; every item applies here. The ones this plan exercises directly:
 
 - **Palette:** ground `#F7E3E6`, surface `#FFFBF7`, inset `#FDF2F4`, rose `#E89BB0`, cerise `#A64264`, ink `#6E2B45`, ink-soft `#8A5669`, line `#EDCCD6`. Dark: ground `#1B0F15`, surface `#2A1821`, inset `#231420`, ink `#F7E5EA`, ink-soft `#C098AA`, rose `#EFA6BA`, cerise `#F57FA6`, line `#412833`.
@@ -1419,7 +1422,9 @@ git commit -m "feat: add onboarding that writes the settings row"
 
 Splitting the pure `buildTodayView` out of the hook is deliberate: the assembly logic is where a wrong argument order would hide, and a pure function can be tested without rendering anything.
 
-**This task also carries precondition 3.** It calls both `getWeekPlan` (read-only, returns `undefined` for a tombstoned row) and `getOrCreateDayLog` (returns a tombstoned row as if it were live). Decide deliberately and write the decision into a comment: **a tombstoned day log must not be treated as today's log.** Only Plan 4's pull can tombstone one, so this is not reachable yet — but the hook is where it would surface, and discovering it later means a user's ticks vanishing into an invisible row. If `getOrCreateDayLog` returns a row whose `deletedAt` is non-null, treat the day as unlogged.
+**This task also carries precondition 3, and my first instruction for it was wrong twice over.** I told the implementer to read today's log with `getOrCreateDayLog`, "deliberately". That function opens an `rw` transaction, which Dexie forbids inside a `useLiveQuery` querier, so the Today screen could not render at all — see the Global Constraint above. **Read with the read-only `getDayLog` and fall back to a pure in-memory placeholder** built by `blankDayLog(userId, date)`; `updateDayLog` creates the real row on the first tick.
+
+That also dissolves most of precondition 3 rather than solving it: `getDayLog` already returns `undefined` for a tombstoned row, so the hook never sees one, and the placeholder is built from scratch instead of inheriting the tombstoned row's `id` — which was the residual hazard left over from the first attempt, where a sanitized copy kept the dead row's id and later writes could still reach it. The decision still belongs in a comment: **a tombstoned day log is not today's log, and the day reads as unlogged.** The placeholder carries `id: ''` because it is never persisted, so every write must key off `date`, never off `view.log.id`.
 
 - [ ] **Step 1: Write the failing test**
 
