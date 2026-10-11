@@ -19,7 +19,7 @@ export function Stepper({ label, value, min, max, step, onChange }: StepperProps
         disabled={value - step < min}
         onClick={() => onChange(value - step)}
       >
-        {'−'}
+        {'\u2212'}
       </button>
       <span className="stepper__value">{value}</span>
       <button
