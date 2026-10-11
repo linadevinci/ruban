@@ -1,5 +1,10 @@
-import { describe, expect, it } from 'vitest';
-import { buildTodayView, liveDayLog, type TodayInputs } from '@/features/today/useToday';
+import 'fake-indexeddb/auto';
+import { renderHook, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { db } from '@/db/schema';
+import {
+  blankDayLog, buildTodayView, useToday, type TodayInputs,
+} from '@/features/today/useToday';
 import type { DayLog, Settings, WeekPlan } from '@/domain/types';
 
 const settings: Settings = {
@@ -117,8 +122,9 @@ describe('buildTodayView', () => {
   });
 
   it("counts today's own log even when dayLogs does not carry it yet", () => {
-    // The hook reads getOrCreateDayLog and listDayLogs in two concurrent
-    // transactions, so today's row can be missing from the list.
+    // The hook reads today's row with getDayLog and lists the rest with
+    // listDayLogs, as two concurrent reads, so today's row can be missing
+    // from the list.
     const view = buildTodayView(inputs({
       dayLogs: [],
       log: log({ validatedAt: '2026-10-06T21:00:00Z' }),
@@ -160,30 +166,128 @@ describe('buildTodayView', () => {
   });
 });
 
-describe('liveDayLog', () => {
-  it('treats a tombstoned day log as unlogged', () => {
-    const dead = log({
-      deletedAt: '2026-10-06T08:00:00Z', steps: 9000, waterGlasses: 4,
-      jokered: true, validatedAt: '2026-10-06T21:00:00Z',
-      bonusFiredAt: '2026-10-06T21:00:01Z', ticks: { course: true },
-      mood: 4, energy: 3, note: 'ok',
-    });
-    // The whole blanked shape, not a sample of it: a surviving `jokered` would
-    // keep the streak alive on an invisible day, and a stale bonusFiredAt would
+describe('blankDayLog', () => {
+  it('builds an unlogged day', () => {
+    // The whole shape, not a sample of it: a surviving `jokered` would keep the
+    // streak alive on a day nobody logged, and a stale bonusFiredAt would
     // suppress the reward a later task fires off it.
-    expect(liveDayLog(dead)).toEqual({
-      id: 'l1', userId: 'u1', updatedAt: '', deletedAt: null,
+    expect(blankDayLog('u1', '2026-10-06')).toEqual({
+      id: '', userId: 'u1', updatedAt: '', deletedAt: null,
       date: '2026-10-06', ticks: {}, steps: null, waterGlasses: null,
       jokered: false, validatedAt: null, bonusFiredAt: null,
       mood: null, energy: null, note: null,
     });
   });
 
-  it('passes a live day log through untouched', () => {
-    const l = log({ steps: 9000, jokered: true });
-    // Identity alone would still hold if the row were blanked in place.
-    expect(liveDayLog(l)).toBe(l);
-    expect(liveDayLog(l).steps).toBe(9000);
-    expect(liveDayLog(l).jokered).toBe(true);
+  it('carries no id, because no such row exists', () => {
+    // An id here would be either a tombstoned row's (a later write would reach
+    // the invisible row) or a fresh one on every re-run of the querier.
+    expect(blankDayLog('u1', '2026-10-06').id).toBe('');
+  });
+});
+
+describe('useToday', () => {
+  beforeEach(async () => {
+    // A fresh store per case: delete rather than clear, so no schema or row
+    // from an earlier case can make a later one pass.
+    await db.delete();
+    await db.open();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('resolves to a defined view against a seeded settings row', async () => {
+    // Date only, so Testing Library's waitFor keeps its real timers.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    // Midday in Paris on the Tuesday the pure cases above use.
+    vi.setSystemTime(new Date('2026-10-06T10:00:00Z'));
+    await db.settings.put(settings);
+
+    const { result } = renderHook(() => useToday('u1'));
+    await waitFor(() => expect(result.current).toBeDefined());
+
+    const view = result.current;
+    expect(view?.date).toBe('2026-10-06');
+    // No stored week plan on a fresh install, so the default shape applies:
+    // DEFAULT_RUN_DAYS includes Tuesday, so `course` is in.
+    expect(view?.items.map((i) => i.id)).toEqual(['course', 'calories', 'steps', 'water']);
+    expect(view?.validated).toBe(false);
+    expect(view?.daysLeft).toBe(37);
+    // Opening the app reads; it does not write. A getOrCreate here would both
+    // reject inside the liveQuery context and leave a row behind.
+    expect(await db.dayLogs.count()).toBe(0);
+    expect(await db.weekPlans.count()).toBe(0);
+    expect(await db.outbox.count()).toBe(0);
+  });
+
+  it('shows an unlogged placeholder when no day log is stored', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-06T10:00:00Z'));
+    await db.settings.put(settings);
+
+    const { result } = renderHook(() => useToday('u1'));
+    await waitFor(() => expect(result.current).toBeDefined());
+
+    expect(result.current?.log).toEqual(blankDayLog('u1', '2026-10-06'));
+  });
+
+  it('reads the stored day log when there is one', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-06T10:00:00Z'));
+    await db.settings.put(settings);
+    await db.dayLogs.put(log({ steps: 9100, waterGlasses: 6 }));
+
+    const { result } = renderHook(() => useToday('u1'));
+    await waitFor(() => expect(result.current).toBeDefined());
+
+    expect(result.current?.log.id).toBe('l1');
+    expect(result.current?.log.steps).toBe(9100);
+  });
+
+  it('treats a tombstoned day log as unlogged', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-06T10:00:00Z'));
+    await db.settings.put(settings);
+    await db.dayLogs.put(log({
+      deletedAt: '2026-10-06T08:00:00Z', steps: 9100, jokered: true,
+    }));
+
+    const { result } = renderHook(() => useToday('u1'));
+    await waitFor(() => expect(result.current).toBeDefined());
+
+    // The placeholder, id and all: a view built on the tombstoned row's id
+    // could send a later write to the invisible row.
+    expect(result.current?.log).toEqual(blankDayLog('u1', '2026-10-06'));
+  });
+
+  it('falls back to UTC when the stored timezone is one this runtime rejects', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    // 01:30 on the 7th in Paris, still the 6th in UTC, so the fallback zone is
+    // pinned and not just the fact that the querier survived.
+    vi.setSystemTime(new Date('2026-10-06T23:30:00Z'));
+    await db.settings.put({ ...settings, timezone: 'Not/AZone' });
+
+    const { result } = renderHook(() => useToday('u1'));
+    await waitFor(() => expect(result.current).toBeDefined());
+
+    expect(result.current?.date).toBe('2026-10-06');
+  });
+
+  it('resolves to undefined while no settings row exists', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-06T10:00:00Z'));
+    const { result } = renderHook(() => useToday('u1'));
+
+    // Seeded first and waited on, so the querier has demonstrably run; then
+    // the row is taken away. result.current is undefined on the first render
+    // whatever the querier does, so asserting it straight away would prove
+    // nothing. The re-run has to return undefined rather than throw on the
+    // missing row, which is what the early return is for.
+    await db.settings.put(settings);
+    await waitFor(() => expect(result.current).toBeDefined());
+    await db.settings.delete('u1');
+    await waitFor(() => expect(result.current).toBeUndefined());
   });
 });

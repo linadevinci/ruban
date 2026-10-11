@@ -1,6 +1,6 @@
 import { useLiveQuery } from 'dexie-react-hooks';
 import {
-  getOrCreateDayLog, getSettings, getWeekPlan, listCalorieEntries,
+  getDayLog, getSettings, getWeekPlan, listCalorieEntries,
   listDayLogs, listRuns,
 } from '@/db/repos';
 import {
@@ -43,6 +43,8 @@ export interface TodayView {
   /** Resolved through effectiveWeekPlan, so it is the narrow shape, not the
    *  stored row; the row may not exist until the week is first edited. */
   plan: ChecklistPlan;
+  /** The stored row, or blankDayLog's placeholder on a day with none; the id is
+   *  then empty, so a write keys off `date`, never off this. */
   log: DayLog;
   items: ChecklistItem[];
   validated: boolean;
@@ -73,8 +75,9 @@ export function buildTodayView(input: TodayInputs): TodayView {
   const coverage = input.dayLogs.map((row) => ({
     date: row.date, validatedAt: row.validatedAt, jokered: row.jokered,
   }));
-  // The current day's own row may not be in dayLogs yet: the hook runs
-  // getOrCreateDayLog and listDayLogs as two concurrent transactions.
+  // The current day's own row may not be in dayLogs yet: the hook reads it
+  // with getDayLog and lists the rest with listDayLogs, as two concurrent
+  // reads, and on a day with no stored row it is a placeholder besides.
   coverage.push({ date, validatedAt: log.validatedAt, jokered: log.jokered });
 
   return {
@@ -95,20 +98,25 @@ export function buildTodayView(input: TodayInputs): TodayView {
 }
 
 /**
- * getOrCreateDayLog returns a tombstoned row as if it were live. This sanitizes
- * the read only: a tombstoned row is shown as an unlogged day, so its stale
- * ticks, steps, joker and validation never reach the view. The write path is
- * NOT guarded - updateDayLog looks the row up by [userId+date] with no
- * deletedAt filter, so a tick still lands on the invisible row and still
- * vanishes; that is the sync phase's problem, not this one's. Only Plan 4's
- * pull can tombstone a row, so neither case is reachable yet.
+ * The unlogged day a date with no stored row is shown as. Pure, and never
+ * persisted: opening the app must not create a row, so the querier reads with
+ * the read-only getDayLog and falls back to this. getDayLog also returns
+ * undefined for a tombstoned row, so a tombstoned day lands here too and its
+ * stale ticks, steps, joker and validation never reach the view.
+ *
+ * The id is deliberately an empty string, because this row does not exist in
+ * the database: every write must key off `date`, which is what
+ * updateDayLog(userId, date, patch) takes, and never off `view.log.id`. A
+ * placeholder carrying the tombstoned row's id would send a later write to the
+ * invisible row; one carrying a freshly minted id would mint a new one on
+ * every re-run of the querier.
  */
-export function liveDayLog(row: DayLog): DayLog {
-  if (row.deletedAt === null) return row;
+export function blankDayLog(userId: string, date: IsoDate): DayLog {
   return {
-    ...row, deletedAt: null, ticks: {}, steps: null, waterGlasses: null,
+    id: '', userId, date, ticks: {}, steps: null, waterGlasses: null,
     jokered: false, validatedAt: null, bonusFiredAt: null,
     mood: null, energy: null, note: null,
+    updatedAt: '', deletedAt: null,
   };
 }
 
@@ -130,16 +138,19 @@ export function useToday(userId: string): TodayView | undefined {
     const [plan, log, dayLogs, runs, calorieEntries] = await Promise.all([
       // Read-only for the plan: opening the app must not invent a week plan.
       getWeekPlan(userId, week),
-      // getOrCreate for today's log, deliberately: the user is here to tick it,
-      // syncStamps writes to it anyway, and a row for today is a real fact.
-      getOrCreateDayLog(userId, date),
+      // Read-only for the log too, for the same reason and one more: Dexie's
+      // observability middleware rejects any readwrite transaction opened in a
+      // liveQuery context, so a getOrCreate here would make this querier
+      // reject forever and leave Today stuck on undefined. Nothing is lost -
+      // updateDayLog creates the row on the first tick.
+      getDayLog(userId, date),
       listDayLogs(userId),
       listRuns(userId),
       listCalorieEntries(userId),
     ]);
 
     return buildTodayView({
-      date, settings, plan, log: liveDayLog(log), dayLogs,
+      date, settings, plan, log: log ?? blankDayLog(userId, date), dayLogs,
       runsToday: runs.filter((r) => r.date === date),
       calorieEntriesToday: calorieEntries.filter((e) => e.date === date),
       calorieEntriesWeek: calorieEntries.filter((e) => weekDates.has(e.date)),
