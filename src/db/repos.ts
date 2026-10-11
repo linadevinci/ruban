@@ -102,6 +102,14 @@ export async function getDayLog(userId: string, date: IsoDate): Promise<DayLog |
   return row !== undefined && row.deletedAt === null ? row : undefined;
 }
 
+/**
+ * Writes, so it must never be called inside a useLiveQuery querier: Dexie's
+ * observability middleware throws ReadOnlyError on any readwrite transaction
+ * in a querier, even when the row exists and nothing would be written, and
+ * the querier then rejects forever. Read with getDayLog instead and let
+ * the update form create the row on the first real edit. This shipped once
+ * and left the Today screen unrenderable while every test passed.
+ */
 export async function getOrCreateDayLog(userId: string, date: IsoDate): Promise<DayLog> {
   let row!: DayLog;
   await db.transaction('rw', db.dayLogs, db.outbox, async () => {
@@ -165,6 +173,14 @@ export async function getWeekPlan(
   return row !== undefined && row.deletedAt === null ? row : undefined;
 }
 
+/**
+ * Writes, so it must never be called inside a useLiveQuery querier: Dexie's
+ * observability middleware throws ReadOnlyError on any readwrite transaction
+ * in a querier, even when the row exists and nothing would be written, and
+ * the querier then rejects forever. Read with getWeekPlan instead and let
+ * the update form create the row on the first real edit. This shipped once
+ * and left the Today screen unrenderable while every test passed.
+ */
 export async function getOrCreateWeekPlan(userId: string, isoWeek: IsoWeek): Promise<WeekPlan> {
   let row!: WeekPlan;
   await db.transaction('rw', db.weekPlans, db.outbox, async () => {

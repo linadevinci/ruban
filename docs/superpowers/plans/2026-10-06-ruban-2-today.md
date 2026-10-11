@@ -1429,9 +1429,14 @@ That also dissolves most of precondition 3 rather than solving it: `getDayLog` a
 - [ ] **Step 1: Write the failing test**
 
 ```ts
-import { describe, expect, it } from 'vitest';
-import { buildTodayView, liveDayLog, type TodayInputs } from '@/features/today/useToday';
-import { DEFAULT_NO_DINNER_DAYS, DEFAULT_RUN_DAYS, type DayLog, type Settings, type WeekPlan } from '@/domain/types';
+import 'fake-indexeddb/auto';
+import { renderHook, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { db } from '@/db/schema';
+import {
+  blankDayLog, buildTodayView, useToday, type TodayInputs,
+} from '@/features/today/useToday';
+import type { DayLog, Settings, WeekPlan } from '@/domain/types';
 
 const settings: Settings = {
   userId: 'u1', timezone: 'Europe/Paris',
@@ -1441,9 +1446,16 @@ const settings: Settings = {
   soundEnabled: false, updatedAt: '',
 };
 
+/**
+ * Deliberately NOT the defaults: DEFAULT_RUN_DAYS is [1, 2, 4, 6, 7] and
+ * DEFAULT_NO_DINNER_DAYS is [3, 7]. The reference date 2026-10-06 is a Tuesday,
+ * which this plan makes a no-dinner evening and not a run day - the mirror
+ * image of the defaults - so a build that ignored the stored plan and fell back
+ * to effectiveWeekPlan(undefined) would fail every test below.
+ */
 const plan: WeekPlan = {
   id: 'p1', userId: 'u1', isoWeek: '2026-W41',
-  runDays: [...DEFAULT_RUN_DAYS], noDinnerDays: [...DEFAULT_NO_DINNER_DAYS],
+  runDays: [1, 3, 5], noDinnerDays: [2],
   jokerUsedOn: null, updatedAt: '', deletedAt: null,
 };
 
@@ -1456,6 +1468,8 @@ function log(partial: Partial<DayLog> = {}): DayLog {
   };
 }
 
+// Coherent by construction: 2026-10-06 is in 2026-W41, and log.date matches.
+// A case that moves `date` has to move the plan's week and the log's date too.
 function inputs(partial: Partial<TodayInputs> = {}): TodayInputs {
   return {
     date: '2026-10-06', settings, plan, log: log(), dayLogs: [],
@@ -1470,29 +1484,46 @@ describe('buildTodayView', () => {
   });
 
   it('reports the cycle complete the day after the goal', () => {
-    const view = buildTodayView(inputs({ date: '2026-11-13' }));
+    const view = buildTodayView(inputs({
+      date: '2026-11-13',
+      plan: { ...plan, isoWeek: '2026-W46' },
+      log: log({ date: '2026-11-13' }),
+    }));
     expect(view.cycleComplete).toBe(true);
   });
 
-  it('builds a Tuesday checklist without no_dinner', () => {
+  it('builds the Tuesday checklist from the stored plan', () => {
     expect(buildTodayView(inputs()).items.map((i) => i.id))
-      .toEqual(['course', 'calories', 'steps', 'water']);
+      .toEqual(['calories', 'no_dinner', 'steps', 'water']);
+  });
+
+  it('falls back to the default shape when no week plan is stored', () => {
+    // The live branch: getWeekPlan is read-only, so a fresh install's first
+    // Today render has no stored plan at all.
+    const view = buildTodayView(inputs({ plan: undefined }));
+    expect(view.items.map((i) => i.id)).toEqual(['course', 'calories', 'steps', 'water']);
+    // Two default no-dinner evenings, five days at the daily target.
+    expect(view.weeklyBudget).toBe(5 * 1500 + 2 * 900);
   });
 
   it('validates the day when every applicable item is satisfied', () => {
     const view = buildTodayView(inputs({
-      runsToday: [{ date: '2026-10-06', distanceKm: 5, durationS: 1500 }],
-      calorieEntriesToday: [{ date: '2026-10-06', kcal: 1400 }],
-      log: log({ steps: 8200, waterGlasses: 6 }),
+      // No run on purpose: course is not applicable under this plan, so
+      // omitting it keeps the case sensitive to the plan being ignored.
+      calorieEntriesToday: [{ date: '2026-10-06', kcal: 850 }],
+      log: log({ steps: 8200, waterGlasses: 6, ticks: { no_dinner: true } }),
     }));
     expect(view.validated).toBe(true);
   });
 
   it('does not validate a day whose calories exceed the allowance', () => {
     const view = buildTodayView(inputs({
+      // 1000 kcal sits under dailyCalorieTarget but over the 900 no-dinner
+      // allowance this plan puts on a Tuesday. The run satisfies the course
+      // item that the default plan would add, so only calories can fail.
       runsToday: [{ date: '2026-10-06', distanceKm: 5, durationS: 1500 }],
-      calorieEntriesToday: [{ date: '2026-10-06', kcal: 1900 }],
-      log: log({ steps: 8200, waterGlasses: 6 }),
+      calorieEntriesToday: [{ date: '2026-10-06', kcal: 1000 }],
+      log: log({ steps: 8200, waterGlasses: 6, ticks: { no_dinner: true } }),
     }));
     expect(view.validated).toBe(false);
   });
@@ -1504,18 +1535,32 @@ describe('buildTodayView', () => {
         { date: '2026-10-06', kcal: 1400 },
       ],
     }));
-    expect(view.weeklyBudget).toBe(5 * 1500 + 2 * 900);
-    expect(view.weeklyRemaining).toBe(5 * 1500 + 2 * 900 - 2850);
+    // One marked evening in the seven: six days at the daily target plus one
+    // no-dinner allowance.
+    expect(view.weeklyBudget).toBe(6 * 1500 + 1 * 900);
+    expect(view.weeklyRemaining).toBe(6 * 1500 + 1 * 900 - 2850);
   });
 
   it('counts the streak from the supplied day logs', () => {
     const view = buildTodayView(inputs({
       dayLogs: [
-        log({ date: '2026-10-04', validatedAt: '2026-10-04T21:00:00Z' }),
+        // Jokered, not validated: a joker covers a day just as validation does.
+        log({ date: '2026-10-04', jokered: true }),
         log({ date: '2026-10-05', validatedAt: '2026-10-05T21:00:00Z' }),
       ],
     }));
     expect(view.streak).toBe(2);
+  });
+
+  it("counts today's own log even when dayLogs does not carry it yet", () => {
+    // The hook reads today's row with getDayLog and lists the rest with
+    // listDayLogs, as two concurrent reads, so today's row can be missing
+    // from the list.
+    const view = buildTodayView(inputs({
+      dayLogs: [],
+      log: log({ validatedAt: '2026-10-06T21:00:00Z' }),
+    }));
+    expect(view.streak).toBe(1);
   });
 
   it('offers the joker on an uncovered today when the week has one left', () => {
@@ -1533,21 +1578,148 @@ describe('buildTodayView', () => {
     }));
     expect(view.jokerAvailable).toBe(false);
   });
-});
 
-describe('liveDayLog', () => {
-  it('treats a tombstoned day log as unlogged', () => {
-    const dead = log({ deletedAt: '2026-10-06T08:00:00Z', steps: 9000, validatedAt: '2026-10-06T21:00:00Z', ticks: { course: true } });
-    const live = liveDayLog(dead);
-    expect(live.deletedAt).toBeNull();
-    expect(live.steps).toBeNull();
-    expect(live.validatedAt).toBeNull();
-    expect(live.ticks).toEqual({});
+  it('withholds the joker on an already jokered day', () => {
+    // Section 4.4: a jokered day is covered, so it is not offered the joker
+    // a second time.
+    const view = buildTodayView(inputs({ log: log({ jokered: true }) }));
+    expect(view.jokerAvailable).toBe(false);
   });
 
-  it('passes a live day log through untouched', () => {
-    const l = log({ steps: 9000 });
-    expect(liveDayLog(l)).toBe(l);
+  it('withholds the joker before the start date', () => {
+    // 2026-09-30 is the day before startDate, and it lives in 2026-W40.
+    const view = buildTodayView(inputs({
+      date: '2026-09-30',
+      plan: { ...plan, isoWeek: '2026-W40' },
+      log: log({ date: '2026-09-30' }),
+    }));
+    expect(view.jokerAvailable).toBe(false);
+  });
+});
+
+describe('blankDayLog', () => {
+  it('builds an unlogged day', () => {
+    // The whole shape, not a sample of it: a surviving `jokered` would keep the
+    // streak alive on a day nobody logged, and a stale bonusFiredAt would
+    // suppress the reward a later task fires off it.
+    expect(blankDayLog('u1', '2026-10-06')).toEqual({
+      id: '', userId: 'u1', updatedAt: '', deletedAt: null,
+      date: '2026-10-06', ticks: {}, steps: null, waterGlasses: null,
+      jokered: false, validatedAt: null, bonusFiredAt: null,
+      mood: null, energy: null, note: null,
+    });
+  });
+
+  it('carries no id, because no such row exists', () => {
+    // An id here would be either a tombstoned row's (a later write would reach
+    // the invisible row) or a fresh one on every re-run of the querier.
+    expect(blankDayLog('u1', '2026-10-06').id).toBe('');
+  });
+});
+
+describe('useToday', () => {
+  beforeEach(async () => {
+    // A fresh store per case: delete rather than clear, so no schema or row
+    // from an earlier case can make a later one pass.
+    await db.delete();
+    await db.open();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('resolves to a defined view against a seeded settings row', async () => {
+    // Date only, so Testing Library's waitFor keeps its real timers.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    // Midday in Paris on the Tuesday the pure cases above use.
+    vi.setSystemTime(new Date('2026-10-06T10:00:00Z'));
+    await db.settings.put(settings);
+
+    const { result } = renderHook(() => useToday('u1'));
+    await waitFor(() => expect(result.current).toBeDefined());
+
+    const view = result.current;
+    expect(view?.date).toBe('2026-10-06');
+    // No stored week plan on a fresh install, so the default shape applies:
+    // DEFAULT_RUN_DAYS includes Tuesday, so `course` is in.
+    expect(view?.items.map((i) => i.id)).toEqual(['course', 'calories', 'steps', 'water']);
+    expect(view?.validated).toBe(false);
+    expect(view?.daysLeft).toBe(37);
+    // Opening the app reads; it does not write. A getOrCreate here would both
+    // reject inside the liveQuery context and leave a row behind.
+    expect(await db.dayLogs.count()).toBe(0);
+    expect(await db.weekPlans.count()).toBe(0);
+    expect(await db.outbox.count()).toBe(0);
+  });
+
+  it('shows an unlogged placeholder when no day log is stored', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-06T10:00:00Z'));
+    await db.settings.put(settings);
+
+    const { result } = renderHook(() => useToday('u1'));
+    await waitFor(() => expect(result.current).toBeDefined());
+
+    expect(result.current?.log).toEqual(blankDayLog('u1', '2026-10-06'));
+  });
+
+  it('reads the stored day log when there is one', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-06T10:00:00Z'));
+    await db.settings.put(settings);
+    await db.dayLogs.put(log({ steps: 9100, waterGlasses: 6 }));
+
+    const { result } = renderHook(() => useToday('u1'));
+    await waitFor(() => expect(result.current).toBeDefined());
+
+    expect(result.current?.log.id).toBe('l1');
+    expect(result.current?.log.steps).toBe(9100);
+  });
+
+  it('treats a tombstoned day log as unlogged', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-06T10:00:00Z'));
+    await db.settings.put(settings);
+    await db.dayLogs.put(log({
+      deletedAt: '2026-10-06T08:00:00Z', steps: 9100, jokered: true,
+    }));
+
+    const { result } = renderHook(() => useToday('u1'));
+    await waitFor(() => expect(result.current).toBeDefined());
+
+    // The placeholder, id and all: a view built on the tombstoned row's id
+    // could send a later write to the invisible row.
+    expect(result.current?.log).toEqual(blankDayLog('u1', '2026-10-06'));
+  });
+
+  it('falls back to UTC when the stored timezone is one this runtime rejects', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    // 01:30 on the 7th in Paris, still the 6th in UTC, so the fallback zone is
+    // pinned and not just the fact that the querier survived.
+    vi.setSystemTime(new Date('2026-10-06T23:30:00Z'));
+    await db.settings.put({ ...settings, timezone: 'Not/AZone' });
+
+    const { result } = renderHook(() => useToday('u1'));
+    await waitFor(() => expect(result.current).toBeDefined());
+
+    expect(result.current?.date).toBe('2026-10-06');
+  });
+
+  it('resolves to undefined while no settings row exists', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-06T10:00:00Z'));
+    const { result } = renderHook(() => useToday('u1'));
+
+    // Seeded first and waited on, so the querier has demonstrably run; then
+    // the row is taken away. result.current is undefined on the first render
+    // whatever the querier does, so asserting it straight away would prove
+    // nothing. The re-run has to return undefined rather than throw on the
+    // missing row, which is what the early return is for.
+    await db.settings.put(settings);
+    await waitFor(() => expect(result.current).toBeDefined());
+    await db.settings.delete('u1');
+    await waitFor(() => expect(result.current).toBeUndefined());
   });
 });
 ```
@@ -1562,14 +1734,14 @@ Expected: FAIL — module not found.
 ```ts
 import { useLiveQuery } from 'dexie-react-hooks';
 import {
-  getOrCreateDayLog, getSettings, getWeekPlan, listCalorieEntries,
+  getDayLog, getSettings, getWeekPlan, listCalorieEntries,
   listDayLogs, listRuns,
 } from '@/db/repos';
 import {
   dayCalorieTotal, weekCalorieTotal,
   weeklyBudget as computeWeeklyBudget, weeklyRemaining,
 } from '@/domain/budget';
-import { datesOfIsoWeek, isoWeekOf, todayIn } from '@/domain/calendar';
+import { datesOfIsoWeek, isoWeekOf, isValidTimeZone, todayIn } from '@/domain/calendar';
 import {
   effectiveWeekPlan, evaluateChecklist, isDayValidated,
   type ChecklistItem, type ChecklistPlan,
@@ -1581,6 +1753,12 @@ import type { DayLog, IsoDate, Settings, WeekPlan } from '@/domain/types';
 interface RunRow { date: IsoDate; distanceKm: number; durationS: number }
 interface CalorieRow { date: IsoDate; kcal: number }
 
+/**
+ * Coherence invariant, which the caller owes and this module does not re-check:
+ * `log.date === date`, `plan` is the plan of `isoWeekOf(date)` (or undefined),
+ * and `calorieEntriesWeek` covers that same week. useToday derives all four
+ * from one `date`, so the only way to break it is a hand-built input.
+ */
 export interface TodayInputs {
   date: IsoDate;
   settings: Settings;
@@ -1599,6 +1777,8 @@ export interface TodayView {
   /** Resolved through effectiveWeekPlan, so it is the narrow shape, not the
    *  stored row; the row may not exist until the week is first edited. */
   plan: ChecklistPlan;
+  /** The stored row, or blankDayLog's placeholder on a day with none; the id is
+   *  then empty, so a write keys off `date`, never off this. */
   log: DayLog;
   items: ChecklistItem[];
   validated: boolean;
@@ -1629,8 +1809,10 @@ export function buildTodayView(input: TodayInputs): TodayView {
   const coverage = input.dayLogs.map((row) => ({
     date: row.date, validatedAt: row.validatedAt, jokered: row.jokered,
   }));
-  // The current day's own row may not be in dayLogs yet.
-  coverage.push({ date: log.date, validatedAt: log.validatedAt, jokered: log.jokered });
+  // The current day's own row may not be in dayLogs yet: the hook reads it
+  // with getDayLog and lists the rest with listDayLogs, as two concurrent
+  // reads, and on a day with no stored row it is a placeholder besides.
+  coverage.push({ date, validatedAt: log.validatedAt, jokered: log.jokered });
 
   return {
     date, settings, plan, log, items,
@@ -1650,17 +1832,25 @@ export function buildTodayView(input: TodayInputs): TodayView {
 }
 
 /**
- * getOrCreateDayLog returns a tombstoned row as if it were live. A tombstoned
- * log must not count as today's log (ticks written to an invisible row would
- * vanish), so it is treated as an unlogged day: a blank in-memory log. Only
- * Plan 4's pull can tombstone a row, so this is not reachable yet.
+ * The unlogged day a date with no stored row is shown as. Pure, and never
+ * persisted: opening the app must not create a row, so the querier reads with
+ * the read-only getDayLog and falls back to this. getDayLog also returns
+ * undefined for a tombstoned row, so a tombstoned day lands here too and its
+ * stale ticks, steps, joker and validation never reach the view.
+ *
+ * The id is deliberately an empty string, because this row does not exist in
+ * the database: every write must key off `date`, which is what
+ * updateDayLog(userId, date, patch) takes, and never off `view.log.id`. A
+ * placeholder carrying the tombstoned row's id would send a later write to the
+ * invisible row; one carrying a freshly minted id would mint a new one on
+ * every re-run of the querier.
  */
-export function liveDayLog(row: DayLog): DayLog {
-  if (row.deletedAt === null) return row;
+export function blankDayLog(userId: string, date: IsoDate): DayLog {
   return {
-    ...row, deletedAt: null, ticks: {}, steps: null, waterGlasses: null,
+    id: '', userId, date, ticks: {}, steps: null, waterGlasses: null,
     jokered: false, validatedAt: null, bonusFiredAt: null,
     mood: null, energy: null, note: null,
+    updatedAt: '', deletedAt: null,
   };
 }
 
@@ -1669,23 +1859,32 @@ export function useToday(userId: string): TodayView | undefined {
     const settings = await getSettings(userId);
     if (!settings) return undefined;
 
-    const date = todayIn(settings.timezone);
+    // A stored zone can be one this runtime rejects (synced from a device with
+    // a different ICU, or a zone since dropped), and todayIn would then throw a
+    // RangeError inside this querier. There is no ErrorBoundary above it, so
+    // that is a white screen on the main view. Fall back the way onboarding
+    // does for the detected zone.
+    const timezone = isValidTimeZone(settings.timezone) ? settings.timezone : 'UTC';
+    const date = todayIn(timezone);
     const week = isoWeekOf(date);
     const weekDates = new Set(datesOfIsoWeek(week));
 
     const [plan, log, dayLogs, runs, calorieEntries] = await Promise.all([
       // Read-only for the plan: opening the app must not invent a week plan.
       getWeekPlan(userId, week),
-      // getOrCreate for today's log, deliberately: the user is here to tick it,
-      // syncStamps writes to it anyway, and a row for today is a real fact.
-      getOrCreateDayLog(userId, date),
+      // Read-only for the log too, for the same reason and one more: Dexie's
+      // observability middleware rejects any readwrite transaction opened in a
+      // liveQuery context, so a getOrCreate here would make this querier
+      // reject forever and leave Today stuck on undefined. Nothing is lost -
+      // updateDayLog creates the row on the first tick.
+      getDayLog(userId, date),
       listDayLogs(userId),
       listRuns(userId),
       listCalorieEntries(userId),
     ]);
 
     return buildTodayView({
-      date, settings, plan, log: liveDayLog(log), dayLogs,
+      date, settings, plan, log: log ?? blankDayLog(userId, date), dayLogs,
       runsToday: runs.filter((r) => r.date === date),
       calorieEntriesToday: calorieEntries.filter((e) => e.date === date),
       calorieEntriesWeek: calorieEntries.filter((e) => weekDates.has(e.date)),
@@ -1697,7 +1896,9 @@ export function useToday(userId: string): TodayView | undefined {
 - [ ] **Step 4: Run the tests**
 
 Run: `npm test -- useToday`
-Expected: PASS, 9 tests.
+Expected: PASS, 22 tests.
+
+The brief originally asked for nine and they were not enough twice over: a reviewer showed that hard-coding the day's calorie total to 0 passed every one of them, and that a fixture whose week plan was byte-identical to the defaults meant the stored plan could be ignored entirely with no test noticing. The six `useToday` cases matter most — all nine original tests exercised only the pure `buildTodayView`, which is why a hook that could never resolve went unnoticed.
 
 - [ ] **Step 5: Commit**
 
