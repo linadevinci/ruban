@@ -889,11 +889,15 @@ export async function openDatabase(): Promise<OpenResult> {
     await db.open();
     return { ok: true };
   } catch (error) {
-    const name = (error as { name?: string }).name;
-    const reason = name === 'SecurityError' || name === 'QuotaExceededError'
-      ? 'blocked'
-      : 'unknown';
-    return { ok: false, reason, error };
+    // Read the name defensively. A throw inside this catch would defeat the
+    // whole point of this function, and a rejection is not guaranteed to be an
+    // Error - it can be any value.
+    const name = error instanceof Error ? error.name : undefined;
+    const blocked = name === 'SecurityError'
+      || name === 'QuotaExceededError'
+      // Firefox's private-browsing failure, the classic one in practice.
+      || name === 'InvalidStateError';
+    return { ok: false, reason: blocked ? 'blocked' : 'unknown', error };
   }
 }
 ```
@@ -901,11 +905,24 @@ export async function openDatabase(): Promise<OpenResult> {
 **Do not add a `version(2)`.** See the note above for why the de-duplicating migration was
 dropped.
 
-Tests: a fresh database opens with `{ ok: true }`; and a forced failure returns
-`{ ok: false }` with the error preserved rather than throwing — stub `db.open` to reject with
-a `SecurityError`-shaped object and assert `reason` is `'blocked'`, then with a plain `Error`
-and assert `'unknown'`. Prove the second pair discriminates by making `openDatabase` rethrow
-instead of catching, and watch them fail.
+Tests:
+- A fresh database opens with `{ ok: true }`. **Call `db.close()` first** — the suite's
+  `beforeEach` has already opened it, so without closing, this test passes even against an
+  implementation that rethrows, which makes it worthless.
+- `SecurityError`, `QuotaExceededError` and `InvalidStateError` each give
+  `{ ok: false, reason: 'blocked' }` with `error` preserved by identity.
+- A plain `Error` gives `'unknown'`.
+- **A rejection that is not an `Error` at all** — reject with `null` — returns
+  `{ ok: false, reason: 'unknown' }` and does **not** throw. This is the case that pins the
+  defensive name read; `(error as { name?: string }).name` would raise a TypeError inside the
+  catch and so defeat the entire function.
+
+Prove the failure cases discriminate by making `openDatabase` rethrow instead of catching.
+
+Also test `ensureLocalUser` under concurrency: `Promise.all([ensureLocalUser(),
+ensureLocalUser()])` must return two equal ids. Confirm it fails against the
+non-transactional form before the fix — and if `fake-indexeddb` will not interleave enough to
+make it fail, say so rather than reporting it as proof.
 
 Plan 4 claims this same id on the server at signup, so it is generated once here and never changes. That is the whole reason auth can be deferred without a migration.
 
@@ -964,10 +981,24 @@ export async function getCurrentUserId(): Promise<string | null> {
  * same id on the server, so no data migration is ever needed.
  */
 export async function ensureLocalUser(): Promise<string> {
-  const existing = await getCurrentUserId();
-  if (existing) return existing;
-  const id = newId();
-  await db.meta.put({ key: CURRENT_USER_KEY, value: id });
+  let id!: string;
+  // The read and the write share ONE transaction. Without it, two concurrent
+  // first-run callers can both see no user, mint different ids, and the later
+  // put overwrites the earlier - after the first caller has already handed its
+  // id to the app. Every row written under the losing id would be orphaned,
+  // and Plan 4's signup claims this id on the server, so it must never change.
+  // React StrictMode double-invokes effects in development and two tabs on a
+  // first run do the same; IndexedDB serialises rw transactions on a store, so
+  // one transaction covers both cases.
+  await db.transaction('rw', db.meta, async () => {
+    const row = await db.meta.get(CURRENT_USER_KEY);
+    if (typeof row?.value === 'string' && row.value !== '') {
+      id = row.value;
+      return;
+    }
+    id = newId();
+    await db.meta.put({ key: CURRENT_USER_KEY, value: id });
+  });
   return id;
 }
 ```
