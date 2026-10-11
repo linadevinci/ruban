@@ -2318,6 +2318,8 @@ git commit -m "feat: add the Today screen with bow ticks, streak and joker"
 
 The shell must `await openDatabase()` before it gates on `getCurrentUserId`/`getSettings`, and on `{ ok: false }` render a French explanation rather than a blank page or a spinner that never resolves — distinguish `reason: 'blocked'` (tell her the browser is blocking storage, and that private browsing is the usual cause) from `'unknown'`. Test both branches by making `openDatabase` resolve to each.
 
+**Call it from a `useEffect` with `useState`, never from inside the `useLiveQuery` querier.** `db.open()` runs any pending schema upgrade, and an upgrade writes — which is the `ReadOnlyError` trap in the Global Constraints all over again, except it would only fire on the devices that happen to need the migration, i.e. existing users and never a fresh test database. The gate must resolve before the querier's result is trusted, so the shell has three states and not two: still opening, failed to open, and open.
+
 - [ ] **Step 1: Write the failing test**
 
 ```ts
