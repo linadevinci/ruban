@@ -1051,7 +1051,7 @@ These five cases are the versions that actually shipped, after Task 6's implemen
 
 ```ts
 import 'fake-indexeddb/auto';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { db } from '@/db/schema';
@@ -1136,6 +1136,21 @@ describe('Onboarding', () => {
     expect(await db.settings.count()).toBe(0);
   });
 
+  it('survives a date the browser can emit but parseIsoDate rejects', async () => {
+    render(<Onboarding onDone={() => {}} />);
+    await userEvent.type(screen.getByLabelText('Poids de départ'), '66');
+    await userEvent.type(screen.getByLabelText('Objectif'), '62.3');
+    // A type="date" field accepts more than four year digits in some browsers.
+    // Before isIsoDate guarded it, this threw during render and blanked the page.
+    fireEvent.change(screen.getByLabelText('Date objectif'), {
+      target: { value: '12026-01-01' },
+    });
+    expect(screen.getByLabelText('Poids de départ')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Commencer' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(/date objectif/);
+    expect(await db.settings.count()).toBe(0);
+  });
+
   it('announces its error to assistive technology', async () => {
     render(<Onboarding onDone={() => {}} />);
     await userEvent.click(screen.getByRole('button', { name: 'Commencer' }));
@@ -1205,7 +1220,7 @@ Expected: FAIL — module not found.
 import { useState } from 'react';
 import { ensureLocalUser } from '@/app/session';
 import { saveSettings } from '@/db/repos';
-import { diffDays, isValidTimeZone, todayIn } from '@/domain/calendar';
+import { diffDays, isIsoDate, isValidTimeZone, todayIn } from '@/domain/calendar';
 import { impliedWeeklyRate } from '@/domain/trajectory';
 import { Button } from '@/ui/Button';
 import { kg } from '@/ui/format';
@@ -1263,7 +1278,10 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
   // Guarded on goalDate too: parseIsoDate throws on a malformed date, so
   // computing this during render with an emptied date field would blank the
   // screen rather than show a wrong number.
-  const rate = start !== null && target !== null && goalDate !== ''
+  // isIsoDate, not `!== ''`: a date input can emit a 5-digit year, which the
+  // now-strict parseIsoDate would reject by throwing - during render, blanking
+  // the screen on the app's very first form.
+  const rate = start !== null && target !== null && isIsoDate(goalDate)
     ? impliedWeeklyRate({ startDate, startWeight: start, targetWeight: target, goalDate })
     : null;
 
@@ -1273,7 +1291,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
       setError('Il me faut ton poids de départ et ton objectif.');
       return;
     }
-    if (goalDate === '' || diffDays(startDate, goalDate) <= 0) {
+    if (!isIsoDate(goalDate) || diffDays(startDate, goalDate) <= 0) {
       setError('Il me faut une date objectif, après aujourd\u2019hui.');
       return;
     }

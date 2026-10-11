@@ -265,6 +265,27 @@ describe('parseIsoDate rejects malformed input', () => {
     expect(() => parseIsoDate('2026-10')).toThrow(/Not an ISO date/);
     expect(() => parseIsoDate('2026-1-1')).toThrow(/Not an ISO date/);
   });
+
+  it('rejects a well-formed date that is not a real one', () => {
+    // The shape regex passes these; Date.UTC would silently roll them over.
+    expect(() => parseIsoDate('2026-02-31')).toThrow(/Not a real calendar date/);
+    expect(() => parseIsoDate('2026-13-01')).toThrow(/Not a real calendar date/);
+    expect(() => parseIsoDate('2026-00-10')).toThrow(/Not a real calendar date/);
+    // ...but a real leap day is accepted.
+    expect(formatUtcNoonDate(parseIsoDate('2028-02-29'))).toBe('2028-02-29');
+  });
+});
+
+describe('isIsoDate', () => {
+  it('accepts a real date and rejects everything parseIsoDate would', () => {
+    expect(isIsoDate('2026-11-12')).toBe(true);
+    expect(isIsoDate('')).toBe(false);
+    expect(isIsoDate('garbage')).toBe(false);
+    expect(isIsoDate('2026-02-31')).toBe(false);
+    // A date input can emit a 5-digit year; this is what stops it reaching
+    // parseIsoDate during a render and blanking the screen.
+    expect(isIsoDate('12026-01-01')).toBe(false);
+  });
 });
 
 describe('weekdayOf', () => {
@@ -367,7 +388,24 @@ export function parseIsoDate(d: IsoDate): Date {
     throw new Error(`Not an ISO date (expected YYYY-MM-DD): ${JSON.stringify(d)}`);
   }
   const [, y, m, day] = match;
-  return new Date(Date.UTC(Number(y), Number(m) - 1, Number(day), 12));
+  const date = new Date(Date.UTC(Number(y), Number(m) - 1, Number(day), 12));
+  // The regex only checks shape, so 2026-02-31 would pass it and Date.UTC
+  // would roll it over to 2026-03-03. Round-tripping rejects a date that is
+  // well-formed but not real.
+  if (formatUtcNoonDate(date) !== d) {
+    throw new Error(`Not a real calendar date: ${JSON.stringify(d)}`);
+  }
+  return date;
+}
+
+/** True iff `parseIsoDate` would accept this string. For validating user input. */
+export function isIsoDate(d: string): boolean {
+  try {
+    parseIsoDate(d);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function formatUtcNoonDate(dt: Date): IsoDate {
