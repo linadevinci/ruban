@@ -1,0 +1,46 @@
+.card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-card);
+  overflow: hidden;
+}
+.card__body { padding: 18px; }
+
+.btn {
+  font: inherit;
+  font-weight: 500;
+  border-radius: var(--r-pill);
+  padding: 11px 20px;
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+.btn:disabled { opacity: 0.5; cursor: default; }
+.btn--solid { background: var(--cerise); color: var(--surface); }
+.btn--quiet { background: none; color: var(--cerise); border-color: var(--line); }
+
+.pill {
+  display: inline-block;
+  font-size: var(--step--1);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  border-radius: var(--r-pill);
+  padding: 3px 11px;
+}
+.pill--rose { background: var(--rose); color: var(--on-rose); }
+.pill--quiet { background: var(--inset); color: var(--ink-soft); border: 1px solid var(--line); }
+
+.stepper { display: flex; align-items: center; gap: 12px; }
+.stepper__btn {
+  width: 34px; height: 34px;
+  display: grid; place-items: center;
+  font: inherit; font-size: var(--step-1); line-height: 1;
+  background: var(--inset); color: var(--ink);
+  border: 1px solid var(--line); border-radius: 50%;
+  cursor: pointer;
+}
+.stepper__btn:disabled { opacity: 0.4; cursor: default; }
+.stepper__value {
+  min-width: 2.5ch; text-align: center;
+  font-family: var(--font-display); font-size: var(--step-2);
+  font-variant-numeric: tabular-nums;
+}
