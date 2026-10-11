@@ -53,6 +53,7 @@ Identical to Plan 1's Global Constraints section — read it there; every item a
 - **Every animation respects `prefers-reduced-motion`,** degrading to a crossfade.
 - **Every text input sets `font-size: 16px` or larger.** The body scale is 0.95rem (~15.2px), and an input inheriting it makes iOS Safari zoom the page on focus — which on a one-handed checklist app reads as the layout jumping every time you tap a field.
 - **`--rose` is a fill, never text** (1.75:1 on the ground). `--cerise` is the text accent.
+- **Write every non-ASCII character as a `\u` escape, and copy the escape sequence verbatim rather than resolving it to the character it denotes.** A literal is invisible in a diff and one normalisation away from becoming an ASCII space or a hyphen. This has gone wrong three times: twice I wrote literals into the plan, and once an implementer was handed `{'\u2212'}` and wrote the glyph instead — which renders identically and so passes review unless someone greps bytes. Code comments stay ASCII too.
 - **Sound defaults off** (`settings.soundEnabled === false`).
 - **No rule logic in components.** Components call `@/domain/*`.
 
@@ -642,9 +643,25 @@ describe('Stepper', () => {
     expect(onChange).not.toHaveBeenCalled();
   });
 
+  it('stays enabled one step short of each bound, and reaches it exactly', async () => {
+    const onChange = vi.fn();
+    const { rerender } = render(
+      <Stepper label="Eau" value={9} min={0} max={10} step={1} onChange={onChange} />,
+    );
+    // A `>=` slip in the increment guard would wrongly disable this at max - step.
+    await userEvent.click(screen.getByRole('button', { name: 'Augmenter Eau' }));
+    expect(onChange).toHaveBeenCalledWith(10);
+
+    onChange.mockClear();
+    rerender(<Stepper label="Eau" value={1} min={0} max={10} step={1} onChange={onChange} />);
+    // A `<=` slip in the decrement guard would wrongly disable this at min + step.
+    await userEvent.click(screen.getByRole('button', { name: 'Diminuer Eau' }));
+    expect(onChange).toHaveBeenCalledWith(0);
+  });
+
   it('shows the current value, and updates when it changes', () => {
     // Two distinct values, neither equal to min, max or step. A single
-    // assertion at value={3} passes against a hardcoded 3 — and against a
+    // assertion at value={3} passes against a hardcoded 3, and against a
     // render of step, which is also 1 away. Re-rendering is what makes this
     // discriminate.
     const { rerender } = render(
