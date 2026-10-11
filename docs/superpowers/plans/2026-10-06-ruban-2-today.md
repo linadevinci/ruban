@@ -864,7 +864,7 @@ git commit -m "feat: add card, button, pill and stepper primitives"
   - `getCurrentUserId(): Promise<string | null>`
   - `ensureLocalUser(): Promise<string>` — creates and remembers a UUIDv7 on first run
   - `CURRENT_USER_KEY` (the meta key, exported for tests)
-  - `openDatabase(): Promise<{ ok: true } | { ok: false; reason: 'corrupt' | 'unknown'; error: unknown }>` in `src/db/schema.ts`
+  - `openDatabase(): Promise<OpenResult>` in `src/db/schema.ts`, where `OpenResult` is `{ ok: true } | { ok: false; reason: 'blocked' | 'unknown'; error: unknown }` — see the code block below, which is authoritative
 
 **This task also carries precondition 1, because it is the first code that opens the database.**
 
