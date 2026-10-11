@@ -351,8 +351,6 @@ import type { IsoDate, IsoWeek, Weekday } from './types';
 
 const DAY_MS = 86_400_000;
 
-const ISO_DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
-
 /**
  * Parsed at UTC noon: a +/-12h shift can never land on another calendar date.
  *
@@ -364,8 +362,10 @@ const ISO_DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
  * An empty goal date showed "0,0 kg par semaine" and a countdown of J-46304.
  */
 export function parseIsoDate(d: IsoDate): Date {
-  const match = ISO_DATE_PATTERN.exec(d);
-  if (!match) throw new Error(`Not an ISO date (expected YYYY-MM-DD): ${JSON.stringify(d)}`);
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(d);
+  if (match === null) {
+    throw new Error(`Not an ISO date (expected YYYY-MM-DD): ${JSON.stringify(d)}`);
+  }
   const [, y, m, day] = match;
   return new Date(Date.UTC(Number(y), Number(m) - 1, Number(day), 12));
 }

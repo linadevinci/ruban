@@ -1205,7 +1205,7 @@ Expected: FAIL — module not found.
 import { useState } from 'react';
 import { ensureLocalUser } from '@/app/session';
 import { saveSettings } from '@/db/repos';
-import { diffDays, todayIn } from '@/domain/calendar';
+import { diffDays, isValidTimeZone, todayIn } from '@/domain/calendar';
 import { impliedWeeklyRate } from '@/domain/trajectory';
 import { Button } from '@/ui/Button';
 import { kg } from '@/ui/format';
@@ -1240,7 +1240,10 @@ function Field({ label, value, onChange, inputMode = 'decimal' }: NumberFieldPro
 }
 
 export function Onboarding({ onDone }: { onDone: () => void }) {
-  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const detected = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  // An unusable stored zone would make todayIn throw on every later render,
+  // so a zone that fails isValidTimeZone is replaced before it is ever stored.
+  const timezone = isValidTimeZone(detected) ? detected : 'UTC';
   const [startWeight, setStartWeight] = useState('');
   const [targetWeight, setTargetWeight] = useState('');
   const [goalDate, setGoalDate] = useState('2026-11-12');
@@ -1294,6 +1297,7 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
     }
     setError(null);
     setBusy(true);
+    try {
     const userId = await ensureLocalUser();
     await saveSettings({
       userId,
@@ -1312,6 +1316,10 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
       soundEnabled: false,
     });
     onDone();
+    } finally {
+      // Reset even on a failed write, or the button stays disabled for good.
+      setBusy(false);
+    }
   }
 
   return (
