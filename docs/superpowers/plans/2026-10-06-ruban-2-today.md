@@ -891,8 +891,15 @@ export async function openDatabase(): Promise<OpenResult> {
   } catch (error) {
     // Read the name defensively. A throw inside this catch would defeat the
     // whole point of this function, and a rejection is not guaranteed to be an
-    // Error - it can be any value.
-    const name = error instanceof Error ? error.name : undefined;
+    // Error - it can be any value. Duck-typed rather than instanceof Error,
+    // because a DOMException is NOT an instanceof Error here: verified by
+    // assertion under this project's test environment, and cross-realm
+    // DOMExceptions (an iframe) behave the same way in real browsers. Using
+    // instanceof would misclassify every blocked-storage failure as 'unknown',
+    // which is precisely the case this function exists to report.
+    const name = typeof error === 'object' && error !== null && 'name' in error
+      ? error.name
+      : undefined;
     const blocked = name === 'SecurityError'
       || name === 'QuotaExceededError'
       // Firefox's private-browsing failure, the classic one in practice.
