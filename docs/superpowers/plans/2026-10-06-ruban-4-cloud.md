@@ -20,7 +20,12 @@ Plan 1's Global Constraints apply in full. Added here:
 - **Cursors use server time; last-write-wins uses client time** (spec §7). Realised by a `serverUpdatedAt` column that **only the database ever writes**: pulls filter on it, merges compare the client's `updatedAt`. This is what makes "a skewed phone clock must never cause a row to be *missed*" actually true.
 - **Nothing is ever hard-deleted.** Tombstones sync like any other change.
 - **A tombstoned `dayLogs` or `weekPlans` row needs a resurrect path, and this plan is where
-  it becomes reachable.** `softDelete`'s table union excludes both, and `updateDayLog`'s
+  it becomes reachable.** Note what Task 7 of Plan 2 already does and does not solve: its
+  `liveDayLog` helper stops a tombstoned row being *displayed* as today's log, but the
+  placeholder it substitutes **keeps the tombstoned row's id**, so a subsequent tick still
+  writes through `getOrCreateDayLog` to the invisible row. The read is guarded; the write is
+  not. Whatever resurrect rule this plan settles on has to cover the write path too, or a
+  user's ticks will land somewhere no screen ever shows them. `softDelete`'s table union excludes both, and `updateDayLog`'s
   patch type omits `deletedAt`, so neither can be tombstoned locally — but a pull can
   tombstone either. Once that happens the unique natural-key index forbids creating a fresh
   row for that date, and `updateDayLog` would write to a row every read filters out: the

@@ -66,7 +66,8 @@ Identical to Plan 1's Global Constraints section — read it there; every item a
 - **Every animation respects `prefers-reduced-motion`,** degrading to a crossfade.
 - **Every text input sets `font-size: 16px` or larger.** The body scale is 0.95rem (~15.2px), and an input inheriting it makes iOS Safari zoom the page on focus — which on a one-handed checklist app reads as the layout jumping every time you tap a field.
 - **`--rose` is a fill, never text** (1.75:1 on the ground). `--cerise` is the text accent.
-- **Write every non-ASCII character as a `\u` escape, and copy the escape sequence verbatim rather than resolving it to the character it denotes.** A literal is invisible in a diff and one normalisation away from becoming an ASCII space or a hyphen. This has gone wrong three times: twice I wrote literals into the plan, and once an implementer was handed `{'\u2212'}` and wrote the glyph instead — which renders identically and so passes review unless someone greps bytes. Code comments stay ASCII too.
+- **Write every *confusable or invisible* character as a `\u` escape, and copy the escape sequence verbatim rather than resolving it to the character it denotes.** The ones that matter are the ones that look like an ASCII neighbour: U+202F narrow no-break space and U+00A0 no-break space (both look like a space), U+2212 minus and U+2014 em dash (both look like a hyphen), U+2019 right single quote (looks like an apostrophe), U+2026 ellipsis (looks like three dots) and U+00B7 middle dot. A literal is invisible in a diff and one normalisation away from becoming its ASCII lookalike. This has gone wrong three times: twice I wrote literals into the plan, and once an implementer was handed `{'\u2212'}` and wrote the glyph instead — which renders identically and so passes review unless someone greps bytes.
+  **Accented letters are the exception and stay literal**: write `Poids de départ`, not `Poids de d\u00e9part`. An `é` is visibly distinct from any ASCII character, so it cannot be silently substituted, and escaping it would make every French string in the app unreadable. The shipped code already follows this split — literal accents, escaped `\u2019`. Code comments stay ASCII throughout, accents included.
 - **Sound defaults off** (`settings.soundEnabled === false`).
 - **No rule logic in components.** Components call `@/domain/*`.
 
@@ -957,7 +958,7 @@ describe('session', () => {
     expect(await getCurrentUserId()).toBe(id);
   });
 
-  it('is idempotent — the id never changes once created', async () => {
+  it('is idempotent \u2014 the id never changes once created', async () => {
     const first = await ensureLocalUser();
     const second = await ensureLocalUser();
     expect(second).toBe(first);
@@ -1034,7 +1035,7 @@ git commit -m "feat: add local session with a stable user id"
 - Consumes: `ensureLocalUser`, `saveSettings`, `impliedWeeklyRate`, `todayIn`, `kg`, primitives.
 - Produces: `<Onboarding onDone={() => void} />`
 
-**This task also carries precondition 2, because it is the first code to write and read a timezone.**
+**This task also carries the write half of precondition 2. It is the first code to write a timezone — but not to read a stored one, which is where the real hazard is, so the read guard belongs to Task 7.** I allocated the whole precondition here and that was wrong: onboarding validates the *browser-detected* zone, while `useToday` is the first and only code that reads the zone back out of settings and hands it to `todayIn`. An unusable stored value (synced from another device in Plan 4, or a zone dropped from ICU) throws a `RangeError` inside a `useLiveQuery` querier, and there is no ErrorBoundary anywhere in `src/`, so the main screen goes white. Task 7 guards the read site.
 
 Onboarding stores `Intl.DateTimeFormat().resolvedOptions().timeZone`, and every later screen reads it back and hands it to `todayIn`. Two gaps close here:
 
@@ -1406,6 +1407,8 @@ git commit -m "feat: add onboarding that writes the settings row"
 - Create: `src/features/today/useToday.ts`
 - Test: `src/features/today/useToday.test.ts`
 
+**These code blocks are copied verbatim from the shipped files.** Three defects were found while implementing: `plan.jokerUsedOn` did not compile, because `plan` is the narrow `ChecklistPlan` and the joker field lives on the raw `input.plan`; the nine original tests did not cover `calorieTotal` at all, so a hard-coded 0 passed every one of them; and the tombstone check was inline in the hook rather than in a testable pure helper. The shipped version fixes all three.
+
 **Interfaces:**
 - Consumes: repos, `useLiveQuery`, every relevant domain function.
 - Produces:
@@ -1422,7 +1425,7 @@ Splitting the pure `buildTodayView` out of the hook is deliberate: the assembly 
 
 ```ts
 import { describe, expect, it } from 'vitest';
-import { buildTodayView, type TodayInputs } from '@/features/today/useToday';
+import { buildTodayView, liveDayLog, type TodayInputs } from '@/features/today/useToday';
 import { DEFAULT_NO_DINNER_DAYS, DEFAULT_RUN_DAYS, type DayLog, type Settings, type WeekPlan } from '@/domain/types';
 
 const settings: Settings = {
@@ -1480,6 +1483,15 @@ describe('buildTodayView', () => {
     expect(view.validated).toBe(true);
   });
 
+  it('does not validate a day whose calories exceed the allowance', () => {
+    const view = buildTodayView(inputs({
+      runsToday: [{ date: '2026-10-06', distanceKm: 5, durationS: 1500 }],
+      calorieEntriesToday: [{ date: '2026-10-06', kcal: 1900 }],
+      log: log({ steps: 8200, waterGlasses: 6 }),
+    }));
+    expect(view.validated).toBe(false);
+  });
+
   it('computes the weekly remaining from the week entries, not the day entries', () => {
     const view = buildTodayView(inputs({
       calorieEntriesWeek: [
@@ -1515,6 +1527,22 @@ describe('buildTodayView', () => {
       log: log({ validatedAt: '2026-10-06T21:00:00Z' }),
     }));
     expect(view.jokerAvailable).toBe(false);
+  });
+});
+
+describe('liveDayLog', () => {
+  it('treats a tombstoned day log as unlogged', () => {
+    const dead = log({ deletedAt: '2026-10-06T08:00:00Z', steps: 9000, validatedAt: '2026-10-06T21:00:00Z', ticks: { course: true } });
+    const live = liveDayLog(dead);
+    expect(live.deletedAt).toBeNull();
+    expect(live.steps).toBeNull();
+    expect(live.validatedAt).toBeNull();
+    expect(live.ticks).toEqual({});
+  });
+
+  it('passes a live day log through untouched', () => {
+    const l = log({ steps: 9000 });
+    expect(liveDayLog(l)).toBe(l);
   });
 });
 ```
@@ -1564,7 +1592,7 @@ export interface TodayView {
   date: IsoDate;
   settings: Settings;
   /** Resolved through effectiveWeekPlan, so it is the narrow shape, not the
-   *  stored row — the row may not exist until the week is first edited. */
+   *  stored row; the row may not exist until the week is first edited. */
   plan: ChecklistPlan;
   log: DayLog;
   items: ChecklistItem[];
@@ -1582,7 +1610,7 @@ export function buildTodayView(input: TodayInputs): TodayView {
   const { date, settings, log } = input;
   const plan = effectiveWeekPlan(input.plan);
   const week = isoWeekOf(date);
-  // §4.7's sums come from the domain, not from each screen re-deriving them.
+  // Section 4.7's sums come from the domain, not from each screen re-deriving them.
   const calorieTotal = dayCalorieTotal(input.calorieEntriesToday, date);
   const consumedThisWeek = weekCalorieTotal(input.calorieEntriesWeek, week);
 
@@ -1608,10 +1636,26 @@ export function buildTodayView(input: TodayInputs): TodayView {
     jokerAvailable: canUseJoker({
       date, today: date, startDate: settings.startDate,
       coverage: { date, validatedAt: log.validatedAt, jokered: log.jokered },
-      weekPlanJokerUsedOn: plan.jokerUsedOn,
+      // ChecklistPlan is narrow; the joker lives on the stored row, if any.
+      weekPlanJokerUsedOn: input.plan?.jokerUsedOn ?? null,
     }),
     weeklyBudget: computeWeeklyBudget(week, plan, settings),
     weeklyRemaining: weeklyRemaining(week, plan, settings, consumedThisWeek),
+  };
+}
+
+/**
+ * getOrCreateDayLog returns a tombstoned row as if it were live. A tombstoned
+ * log must not count as today's log (ticks written to an invisible row would
+ * vanish), so it is treated as an unlogged day: a blank in-memory log. Only
+ * Plan 4's pull can tombstone a row, so this is not reachable yet.
+ */
+export function liveDayLog(row: DayLog): DayLog {
+  if (row.deletedAt === null) return row;
+  return {
+    ...row, deletedAt: null, ticks: {}, steps: null, waterGlasses: null,
+    jokered: false, validatedAt: null, bonusFiredAt: null,
+    mood: null, energy: null, note: null,
   };
 }
 
@@ -1636,7 +1680,7 @@ export function useToday(userId: string): TodayView | undefined {
     ]);
 
     return buildTodayView({
-      date, settings, plan, log, dayLogs,
+      date, settings, plan, log: liveDayLog(log), dayLogs,
       runsToday: runs.filter((r) => r.date === date),
       calorieEntriesToday: calorieEntries.filter((e) => e.date === date),
       calorieEntriesWeek: calorieEntries.filter((e) => weekDates.has(e.date)),
@@ -1956,6 +2000,8 @@ git commit -m "feat: add synthesised reward sounds and the bow shower"
 
 ### Task 10: The Today screen
 
+**This task owns the joker's rule 6 test, a debt carried from Plan 1.** Rule 6 says the week consulted must be that of the date being *excused*, not today's week. It is untestable inside `canUseJoker`, and it is untestable in Task 7's `buildTodayView` too, which passes `date, today: date` — the same value by construction, so the two weeks are trivially identical and no test could tell a correct implementation from a wrong one. Here the joker is actually spent, via `updateWeekPlan(userId, isoWeekOf(view.date), ...)`, so a test must pin that the week written is the excused date's week. A Sunday/Monday boundary is the case that discriminates: ISO weeks start on Monday, so excusing a Sunday from a Monday writes to the previous week.
+
 **Files:**
 - Create: `src/features/today/Today.tsx`, `src/features/today/Checklist.tsx`, `src/features/today/StreakCard.tsx`, `src/features/today/today.css`
 - Test: `src/features/today/Today.test.tsx`
@@ -2163,7 +2209,7 @@ export function Today({ userId }: { userId: string }) {
     return () => { cancelled = true; };
   }, [userId, view?.validated, view?.log.bonusFiredAt]);
 
-  if (!view) return <p>Un instant…</p>;
+  if (!view) return <p>Un instant\u2026</p>;
 
   const sound = view.settings.soundEnabled;
 
@@ -2191,7 +2237,7 @@ export function Today({ userId }: { userId: string }) {
         <Checklist items={view.items} onToggle={toggle} />
 
         <div className="today__amount">
-          <span>Pas · objectif {view.settings.stepTarget}</span>
+          <span>Pas {'\u00b7'} objectif {view.settings.stepTarget}</span>
           <input
             aria-label="Pas"
             inputMode="numeric"
@@ -2210,7 +2256,7 @@ export function Today({ userId }: { userId: string }) {
         </div>
 
         <div className="today__amount">
-          <span>Eau · objectif {view.settings.waterTarget}</span>
+          <span>Eau {'\u00b7'} objectif {view.settings.waterTarget}</span>
           <Stepper
             label="Eau"
             value={view.log.waterGlasses ?? 0}
@@ -2263,6 +2309,10 @@ git commit -m "feat: add the Today screen with bow ticks, streak and joker"
 **Interfaces:**
 - Produces: `<App />`, routing `/` → Today, `/poids`, `/calories`, `/course`, `/moi`. Plans 3 fills the last four; this task gives each a placeholder heading so the tab bar is navigable.
 
+**This task also carries precondition 1, which Task 5 built but left unwired.** Task 5 added `openDatabase()` so a failed `db.open()` becomes a value instead of a rejection, and nothing in the project calls it — `grep -rn openDatabase src/` matches only its own definition. The stated purpose was that *the first screen to open the database must be able to say something to the user instead of rendering blank*, and that purpose is still unmet: the repos open Dexie implicitly, so on a device with storage blocked (iOS private browsing, Firefox private windows) the app renders nothing at all. This is the "prose with no owning task" failure this plan warns about in its own preamble; building a value-returning wrapper satisfied Task 5's tests without satisfying the requirement.
+
+The shell must `await openDatabase()` before it gates on `getCurrentUserId`/`getSettings`, and on `{ ok: false }` render a French explanation rather than a blank page or a spinner that never resolves — distinguish `reason: 'blocked'` (tell her the browser is blocking storage, and that private browsing is the usual cause) from `'unknown'`. Test both branches by making `openDatabase` resolve to each.
+
 - [ ] **Step 1: Write the failing test**
 
 ```ts
@@ -2307,7 +2357,7 @@ describe('App', () => {
       runSessionsTarget: 5, soundEnabled: false,
     });
     render(<App />);
-    for (const name of ['Aujourd’hui', 'Poids', 'Calories', 'Course', 'Moi']) {
+    for (const name of ['Aujourd\u2019hui', 'Poids', 'Calories', 'Course', 'Moi']) {
       expect(await screen.findByRole('link', { name })).toBeInTheDocument();
     }
   });
@@ -2354,7 +2404,7 @@ import { NavLink } from 'react-router';
 import '@/app/app.css';
 
 const TABS = [
-  { to: '/', label: 'Aujourd’hui' },
+  { to: '/', label: 'Aujourd\u2019hui' },
   { to: '/poids', label: 'Poids' },
   { to: '/calories', label: 'Calories' },
   { to: '/course', label: 'Course' },
@@ -2397,7 +2447,7 @@ export function App() {
     return { userId, hasSettings: (await getSettings(userId)) !== undefined };
   }, []);
 
-  if (!state) return <div className="app"><p>Un instant…</p></div>;
+  if (!state) return <div className="app"><p>Un instant\u2026</p></div>;
 
   if (!state.userId || !state.hasSettings) {
     // useLiveQuery re-runs on the settings write, so no explicit callback is needed.
