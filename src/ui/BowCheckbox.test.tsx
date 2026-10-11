@@ -4,6 +4,18 @@ import { describe, expect, it, vi } from 'vitest';
 import { BowCheckbox } from '@/ui/BowCheckbox';
 
 describe('BowCheckbox', () => {
+  it('reports aria-checked when checked', () => {
+    render(<BowCheckbox label="Course" checked onChange={() => {}} />);
+    expect(screen.getByRole('checkbox', { name: 'Course' })).toBeChecked();
+  });
+
+  it('marks a disabled box with aria-disabled, not the native attribute', () => {
+    render(<BowCheckbox label="Course" checked={false} onChange={() => {}} disabled />);
+    const box = screen.getByRole('checkbox', { name: 'Course' });
+    expect(box).toHaveAttribute('aria-disabled', 'true');
+    expect(box).not.toHaveAttribute('disabled');
+  });
+
   it('exposes a real checkbox to assistive technology', () => {
     render(<BowCheckbox label="Course" checked={false} onChange={() => {}} />);
     const box = screen.getByRole('checkbox', { name: 'Course' });
