@@ -1122,7 +1122,12 @@ Expected: FAIL — module not found.
 .onb__grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 14px; }
 .onb__field { display: flex; flex-direction: column; gap: 5px; }
 .onb__field input {
-  font: inherit; color: var(--ink);
+  font: inherit;
+  /* After `font: inherit`, which resets size. The body scale is 0.95rem and
+     iOS Safari zooms the page on focusing anything under 16px. This rule also
+     covers the date input, which sits inside the same label. */
+  font-size: 16px;
+  color: var(--ink);
   background: var(--surface); border: 1px solid var(--line);
   border-radius: 12px; padding: 10px 12px; width: 100%;
 }
@@ -2078,9 +2083,10 @@ export function Today({ userId }: { userId: string }) {
               void updateDayLog(userId, view.date, { steps: raw === '' ? null : Number(raw) });
             }}
             style={{
-              width: '6ch', font: 'inherit', textAlign: 'right', color: 'var(--ink)',
-              background: 'var(--inset)', border: '1px solid var(--line)',
-              borderRadius: 10, padding: '6px 8px',
+              // fontSize after font, which resets it: under 16px iOS zooms on focus.
+              width: '6ch', font: 'inherit', fontSize: 16, textAlign: 'right',
+              color: 'var(--ink)', background: 'var(--inset)',
+              border: '1px solid var(--line)', borderRadius: 10, padding: '6px 8px',
             }}
           />
         </div>
