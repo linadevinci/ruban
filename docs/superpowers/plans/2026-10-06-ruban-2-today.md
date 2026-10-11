@@ -398,7 +398,7 @@ Install the React testing stack:
 
 ```bash
 npm install framer-motion dexie-react-hooks react-router
-npm install -D @testing-library/react @testing-library/user-event @testing-library/jest-dom jsdom
+npm install -D @testing-library/react @testing-library/dom @testing-library/user-event @testing-library/jest-dom jsdom
 ```
 
 In `vite.config.ts`, **replace only the `environment: 'node'` line** with the two lines below. Leave `include` and `env` exactly as they are — in particular **keep `env: { TZ: 'Europe/Paris' }`**, which Plan 1's fix wave added so the DST cases can actually fail; dropping it silently returns them to proving nothing. Do not replace the whole `test` block, and do not add a second `environment` key (two would silently keep the first).
@@ -410,10 +410,19 @@ setupFiles: ['./src/test-setup.ts'],
 
 After editing, confirm the block still contains `include`, `env.TZ` and exactly one `environment` key.
 
-Create `src/test-setup.ts`:
+Create `src/test-setup.ts`. **The `afterEach(cleanup)` is not optional:** vitest runs without
+globals, so Testing Library cannot register its own automatic cleanup, and without this every
+render leaks into the next test — the symptom is "found multiple elements with role checkbox"
+across most of a file's cases.
 
 ```ts
 import '@testing-library/jest-dom/vitest';
+import { cleanup } from '@testing-library/react';
+import { afterEach } from 'vitest';
+
+// Vitest runs without globals, so Testing Library cannot register its own
+// automatic cleanup; without this, renders leak between tests.
+afterEach(cleanup);
 ```
 
 **Interfaces:**
