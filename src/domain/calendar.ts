@@ -2,10 +2,14 @@ import type { IsoDate, IsoWeek, Weekday } from './types';
 
 const DAY_MS = 86_400_000;
 
-/** Parsed at UTC noon: a ±12h shift can never land on another calendar date. */
+/** Parsed at UTC noon: a +-12h shift can never land on another calendar date. */
 export function parseIsoDate(d: IsoDate): Date {
-  const [y, m, day] = d.split('-').map(Number);
-  return new Date(Date.UTC(y ?? 0, (m ?? 1) - 1, day ?? 1, 12));
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(d);
+  if (match === null) {
+    throw new Error(`Not an ISO date (expected YYYY-MM-DD): ${JSON.stringify(d)}`);
+  }
+  const [, y, m, day] = match;
+  return new Date(Date.UTC(Number(y), Number(m) - 1, Number(day), 12));
 }
 
 /**

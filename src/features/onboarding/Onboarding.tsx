@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { ensureLocalUser } from '@/app/session';
 import { saveSettings } from '@/db/repos';
-import { isValidTimeZone, todayIn } from '@/domain/calendar';
+import { diffDays, isValidTimeZone, todayIn } from '@/domain/calendar';
 import { impliedWeeklyRate } from '@/domain/trajectory';
 import { Button } from '@/ui/Button';
 import { kg } from '@/ui/format';
@@ -49,38 +49,70 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
   const [waterTarget, setWater] = useState('6');
   const [runSessionsTarget, setRuns] = useState('5');
   const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
 
   const start = parseDecimal(startWeight);
   const target = parseDecimal(targetWeight);
   const startDate = todayIn(timezone);
 
-  const rate = start !== null && target !== null
+  // Guarded on goalDate too: parseIsoDate throws on a malformed date, so an
+  // emptied date field would otherwise blank the screen during render.
+  const rate = start !== null && target !== null && goalDate !== ''
     ? impliedWeeklyRate({ startDate, startWeight: start, targetWeight: target, goalDate })
     : null;
 
   async function submit() {
-    if (start === null || target === null) {
+    if (busy) return;
+    if (start === null || start <= 0 || target === null || target <= 0) {
       setError('Il me faut ton poids de départ et ton objectif.');
       return;
     }
-    const userId = await ensureLocalUser();
-    await saveSettings({
-      userId,
-      timezone,
-      startDate,
-      startWeight: start,
-      targetWeight: target,
-      goalDate,
-      weighInCadence: 'daily',
-      dailyCalorieTarget: Number(dailyCalorieTarget),
-      noDinnerAllowance: Number(noDinnerAllowance),
-      calorieFloor: Number(calorieFloor),
-      stepTarget: Number(stepTarget),
-      waterTarget: Number(waterTarget),
-      runSessionsTarget: Number(runSessionsTarget),
-      soundEnabled: false,
-    });
-    onDone();
+    if (goalDate === '' || diffDays(startDate, goalDate) <= 0) {
+      setError('Il me faut une date objectif, après aujourd\u2019hui.');
+      return;
+    }
+    // The six target fields are plain text inputs, and inputMode does nothing on
+    // a desktop keyboard. Number('') is 0 and Number('abc') is NaN, either of
+    // which would be written into the one settings row every screen reads.
+    const daily = parseDecimal(dailyCalorieTarget);
+    const noDinner = parseDecimal(noDinnerAllowance);
+    const floor = parseDecimal(calorieFloor);
+    const steps = parseDecimal(stepTarget);
+    const water = parseDecimal(waterTarget);
+    const runs = parseDecimal(runSessionsTarget);
+    if (
+      daily === null || noDinner === null || floor === null
+      || steps === null || water === null || runs === null
+      || daily <= 0 || noDinner <= 0 || floor <= 0
+      || steps <= 0 || water <= 0 || runs <= 0
+    ) {
+      setError('Un de tes objectifs n\u2019est pas un nombre valide.');
+      return;
+    }
+    setError(null);
+    setBusy(true);
+    try {
+      const userId = await ensureLocalUser();
+      await saveSettings({
+        userId,
+        timezone,
+        startDate,
+        startWeight: start,
+        targetWeight: target,
+        goalDate,
+        weighInCadence: 'daily',
+        dailyCalorieTarget: daily,
+        noDinnerAllowance: noDinner,
+        calorieFloor: floor,
+        stepTarget: steps,
+        waterTarget: water,
+        runSessionsTarget: runs,
+        soundEnabled: false,
+      });
+      onDone();
+    } finally {
+      setBusy(false);
+    }
   }
 
   return (
@@ -122,9 +154,9 @@ export function Onboarding({ onDone }: { onDone: () => void }) {
         <Field label="Sorties par semaine" value={runSessionsTarget} onChange={setRuns} inputMode="numeric" />
       </div>
 
-      {error && <p className="onb__err">{error}</p>}
+      {error && <p className="onb__err" role="alert">{error}</p>}
 
-      <Button onClick={submit}>Commencer</Button>
+      <Button onClick={submit} disabled={busy}>Commencer</Button>
     </div>
   );
 }

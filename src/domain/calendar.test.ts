@@ -1,10 +1,16 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   addDays, datesOfIsoWeek, diffDays, formatUtcNoonDate, isoWeekOf, isValidTimeZone,
   parseIsoDate, todayIn, weekdayOf,
 } from '@/domain/calendar';
 
 describe('parseIsoDate / formatUtcNoonDate', () => {
+  it('rejects malformed input rather than inventing a date', () => {
+    for (const bad of ['', 'garbage', '2026-10', '2026-1-1']) {
+      expect(() => parseIsoDate(bad), bad).toThrow(/Not an ISO date/);
+    }
+  });
+
   it('parses at UTC noon so no shift crosses a date boundary', () => {
     expect(parseIsoDate('2026-10-06').toISOString()).toBe('2026-10-06T12:00:00.000Z');
   });
@@ -122,19 +128,21 @@ describe('todayIn', () => {
     expect(todayIn('Europe/Paris', new Date('2026-10-25T23:30:00Z'))).toBe('2026-10-26');
   });
 
-  describe('when the formatter omits a part', () => {
-    afterEach(() => { vi.unstubAllGlobals(); });
-
-    it('throws rather than returning a malformed date', () => {
-      const RealFormat = Intl.DateTimeFormat;
-      class NoDayFormat extends RealFormat {
-        override formatToParts(date?: Date | number): Intl.DateTimeFormatPart[] {
-          return super.formatToParts(date).filter((p) => p.type !== 'day');
-        }
-      }
-      vi.stubGlobal('Intl', { ...Intl, DateTimeFormat: NoDayFormat });
+  it('throws rather than returning a malformed date when a part is omitted', () => {
+    const RealFormat = Intl.DateTimeFormat;
+    const spy = vi.spyOn(Intl, 'DateTimeFormat').mockImplementation(function (
+      locale?: string | string[], options?: Intl.DateTimeFormatOptions,
+    ) {
+      const real = new RealFormat(locale, options);
+      return {
+        formatToParts: (date?: Date | number) => real.formatToParts(date).filter((p) => p.type !== 'day'),
+      } as Intl.DateTimeFormat;
+    } as unknown as typeof Intl.DateTimeFormat);
+    try {
       expect(() => todayIn('UTC', new Date('2026-07-14T12:00:00Z'))).toThrow(/day/);
-    });
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
 

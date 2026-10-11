@@ -60,6 +60,39 @@ describe('Onboarding', () => {
     expect((await db.settings.toArray())[0]?.startWeight).toBe(66.5);
   });
 
+  it('refuses a cleared or non-numeric target, rather than saving 0 or NaN', async () => {
+    render(<Onboarding onDone={() => {}} />);
+    await userEvent.type(screen.getByLabelText('Poids de départ'), '66');
+    await userEvent.type(screen.getByLabelText('Objectif'), '62.3');
+    await userEvent.clear(screen.getByLabelText('Cible calories'));
+    await userEvent.click(screen.getByRole('button', { name: 'Commencer' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(/objectifs/);
+    expect(await db.settings.count()).toBe(0);
+
+    await userEvent.type(screen.getByLabelText('Cible calories'), 'abc');
+    await userEvent.click(screen.getByRole('button', { name: 'Commencer' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(/objectifs/);
+    expect(await db.settings.count()).toBe(0);
+  });
+
+  it('refuses an emptied goal date, which would otherwise store 1900-01-01', async () => {
+    render(<Onboarding onDone={() => {}} />);
+    await userEvent.type(screen.getByLabelText('Poids de départ'), '66');
+    await userEvent.type(screen.getByLabelText('Objectif'), '62.3');
+    await userEvent.clear(screen.getByLabelText('Date objectif'));
+    await userEvent.click(screen.getByRole('button', { name: 'Commencer' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(/date objectif/);
+    expect(await db.settings.count()).toBe(0);
+  });
+
+  it('announces its error to assistive technology', async () => {
+    render(<Onboarding onDone={() => {}} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Commencer' }));
+    // role="alert" is what makes a screen reader say anything at all after a
+    // failed submit; without it the message is visual only.
+    expect(await screen.findByRole('alert')).toBeInTheDocument();
+  });
+
   it('falls back to UTC when the detected zone is unusable', async () => {
     const RealFormat = Intl.DateTimeFormat;
     const spy = vi.spyOn(Intl, 'DateTimeFormat').mockImplementation(function (
