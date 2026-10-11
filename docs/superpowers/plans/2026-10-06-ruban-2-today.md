@@ -1923,6 +1923,14 @@ git commit -m "feat: add the Today view model"
 
 **Rules, from spec §4.3 and §4.5:** when the day becomes validated and `validatedAt` is null, stamp it — a *stamp*, not a derivation, so a later settings change cannot retroactively un-validate it. Therefore **never clear `validatedAt`** once set, even if the day stops evaluating as validated. The bonus fires once: if validated and `bonusFiredAt` is null, stamp that too and return `fireBonus: true`.
 
+**The decision must be made from the stored row inside one transaction, not from `view.log`.** `view.log` is a snapshot from the last querier run, and the code block below gets this wrong: it reads `view.log.validatedAt ?? stamp` and then writes. Task 10 calls `syncStamps` from a `useEffect`; React StrictMode double-invokes effects in development, and a re-render can fire a second call before the live query has delivered the updated row. Both calls then see `validatedAt: null`, both write a stamp — so the timestamp is overwritten with a later one and **`fireBonus: true` is returned twice, firing the one-time bonus animation and fanfare twice**. This is the same lost-update shape already fixed once in Plan 1's `updateDayLog`, where a read in one transaction and a write in another let two rapid taps clobber a tick.
+
+So `syncStamps` must not decide from the view. Add a repo function that does the check and the set atomically — something like `stampDayLog(userId, date): Promise<StampResult>` in `src/db/repos.ts`, which inside a single `db.transaction('rw', ...)` reads the row, stamps only the fields that are still null, writes the outbox entry, and reports which stamps it actually applied. `syncStamps` then uses `view` only to decide *whether the day is validated at all*, and takes the `validatedNow`/`fireBonus` answer from the stored row. Note this is the one case where a `getOrCreate`-shaped write is correct: `syncStamps` runs in an effect, never in a querier.
+
+**Narrow the parameter type** to what the function actually reads, `Pick<TodayView, 'date' | 'validated'>`, which also removes the `as unknown as TodayView` double cast from the test fixture below. That cast silently defeats the type checker: a field added to `TodayView` would never be caught, and the fixture would keep compiling against a shape that no longer exists.
+
+**Tests this task owes beyond the four below:** two concurrent `syncStamps` calls on a validated day must return `fireBonus: true` exactly once (drive it with `Promise.all`, and prove it fails against the `view.log`-based version), and a second sequential call must not move the `validatedAt` it already wrote.
+
 - [ ] **Step 1: Write the failing test**
 
 ```ts
