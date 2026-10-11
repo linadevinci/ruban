@@ -19,16 +19,29 @@ runtime database consumer — and all become reachable the moment a screen opens
 
 **Each is allocated to the task that first needs it: (1) → Task 5, (2) → Task 6, (3) → Task 7.** They were prose with no task until the pre-flight scan caught it — the same defect as a spec section with no owner.
 
-1. **A `version(2)` upgrade that de-duplicates, plus an open-failure path.** Plan 1 made
-   `dayLogs`, `weights` and `weekPlans` unique on their natural key *in place* under
-   `version(1)`. This was probed against real Dexie + fake-indexeddb: an existing database
-   holding two rows with the same `(userId, date)` **cannot be opened at all** — `db.open()`
-   rejects with `AbortError`/`ConstraintError`, and **bumping the version alone does not
-   help**, because IndexedDB cannot build a unique index over data that already violates it.
-   So add a `version(2)` whose `upgrade` merges duplicate `(userId, date)` and
-   `(userId, isoWeek)` rows by `updatedAt` *before* the unique index is declared, and give
-   `db.open()` a rejection handler that tells the user something recoverable rather than
-   rendering a blank screen. Nothing in `src/` handles an open rejection today.
+1. **An open-failure path. The de-duplicating migration was dropped — deliberately, and here is why.**
+   Plan 1's final review recommended a `version(2)` upgrade to merge duplicate `(userId, date)`
+   rows, because making the index unique *in place* leaves an already-split database unopenable.
+   That reasoning is sound but its premise does not hold here: **no such database can exist.**
+   Verified before Task 5 was dispatched — nothing outside `src/db` has ever called `db.open()`,
+   no non-test code imports a repo function, `src/App.tsx` is still the Vite template, and the
+   project has never been deployed. The unique index landed before any consumer and before any
+   release, so every database that will ever be created starts clean.
+
+   Building the migration anyway would also be harder than it sounds: IndexedDB populates a
+   unique index *during* the upgrade event and fails before any `upgrade` callback could clean
+   up, so it would need a three-version chain (v2 non-unique plus a de-duplicating upgrade,
+   then v3 unique) — real intricacy guarding a case that cannot arise.
+
+   **If that ever changes** — if a release ships and a later version tightens an existing index
+   to unique — the three-version chain above is the shape to use, and this note is the reason it
+   is not here already.
+
+   What *is* required is the open-failure path, which is not speculative: `db.open()` can reject
+   for reasons that have nothing to do with constraints — private browsing with site data
+   blocked, a storage quota refusal, a corrupted store. Nothing in `src/` handles a rejection
+   today, so the first screen to open the database would render blank with an unhandled promise
+   rejection in the console.
 
 2. **Validate `settings.timezone` at its first read, and make `todayIn` fail loudly.**
    `todayIn` throws `RangeError` on an invalid IANA zone, and its `?? ''` fallback returns a
@@ -857,10 +870,42 @@ git commit -m "feat: add card, button, pill and stepper primitives"
 
 Plan 1 declared `dayLogs`, `weights` and `weekPlans` unique on their natural key *in place* under `version(1)`. That was probed against real Dexie: a database that already holds two rows sharing a `(userId, date)` **cannot be opened at all** — `db.open()` rejects with `AbortError`/`ConstraintError` — and **bumping the version alone does not fix it**, because IndexedDB cannot build a unique index over data that already violates it. So:
 
-1. Add a `version(2)` to `RubanDb` declaring the same stores, whose `.upgrade(tx)` walks `dayLogs`, `weights` and `weekPlans`, groups rows by their natural key, keeps the one with the newest `updatedAt` and deletes the rest. The de-duplication must happen in the upgrade, before the unique index is rebuilt.
-2. Add `openDatabase()` wrapping `db.open()` in a try/catch that returns a discriminated result rather than throwing, so the app can render something recoverable instead of a blank screen. Nothing in `src/` handles an open rejection today.
+Add `openDatabase()` to `src/db/schema.ts`, wrapping `db.open()` so a rejection becomes a value
+rather than an unhandled promise:
 
-Tests: a fresh database opens with `{ ok: true }`; and — the one that matters — seed a `version(1)` database containing two `dayLogs` rows with the same `(userId, date)` and different ids, then open at `version(2)` and assert it succeeds with exactly one row surviving, the newer `updatedAt` one. Write that second test first and watch it fail against a `version(2)` with no `upgrade` body, so you know it is the de-duplication being tested and not the version bump.
+```ts
+export type OpenResult =
+  | { ok: true }
+  | { ok: false; reason: 'blocked' | 'unknown'; error: unknown };
+
+/**
+ * Opens the database without throwing. db.open() can reject for reasons that have
+ * nothing to do with the data: private browsing with site data blocked, a quota
+ * refusal, a corrupted store. The first screen to open the database must be able
+ * to say something to the user instead of rendering blank.
+ */
+export async function openDatabase(): Promise<OpenResult> {
+  try {
+    await db.open();
+    return { ok: true };
+  } catch (error) {
+    const name = (error as { name?: string }).name;
+    const reason = name === 'SecurityError' || name === 'QuotaExceededError'
+      ? 'blocked'
+      : 'unknown';
+    return { ok: false, reason, error };
+  }
+}
+```
+
+**Do not add a `version(2)`.** See the note above for why the de-duplicating migration was
+dropped.
+
+Tests: a fresh database opens with `{ ok: true }`; and a forced failure returns
+`{ ok: false }` with the error preserved rather than throwing — stub `db.open` to reject with
+a `SecurityError`-shaped object and assert `reason` is `'blocked'`, then with a plain `Error`
+and assert `'unknown'`. Prove the second pair discriminates by making `openDatabase` rethrow
+instead of catching, and watch them fail.
 
 Plan 4 claims this same id on the server at signup, so it is generated once here and never changes. That is the whole reason auth can be deferred without a migration.
 
