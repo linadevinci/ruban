@@ -69,10 +69,17 @@ export async function openDatabase(): Promise<OpenResult> {
     await db.open();
     return { ok: true };
   } catch (error) {
-    const name = (error as { name?: string }).name;
-    const reason = name === 'SecurityError' || name === 'QuotaExceededError'
-      ? 'blocked'
-      : 'unknown';
-    return { ok: false, reason, error };
+    // Read the name defensively. A throw inside this catch would defeat the
+    // whole point of this function, and a rejection is not guaranteed to be an
+    // Error - it can be any value. Duck-typed rather than instanceof Error,
+    // because a DOMException from another realm (jsdom, an iframe) is not one.
+    const name = typeof error === 'object' && error !== null && 'name' in error
+      ? error.name
+      : undefined;
+    const blocked = name === 'SecurityError'
+      || name === 'QuotaExceededError'
+      // Firefox's private-browsing failure, the classic one in practice.
+      || name === 'InvalidStateError';
+    return { ok: false, reason: blocked ? 'blocked' : 'unknown', error };
   }
 }

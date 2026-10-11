@@ -118,22 +118,35 @@ describe('openDatabase', () => {
   });
 
   it('opens a fresh database', async () => {
+    // beforeEach has already opened it; close first so this is a real open.
+    db.close();
     expect(await openDatabase()).toEqual({ ok: true });
+    expect(db.isOpen()).toBe(true);
   });
 
-  it('reports a SecurityError as blocked, keeping the error', async () => {
-    const error = { name: 'SecurityError', message: 'denied' };
-    vi.spyOn(db, 'open').mockRejectedValue(error);
-    const result = await openDatabase();
-    expect(result).toEqual({ ok: false, reason: 'blocked', error });
-    if (!result.ok) expect(result.error).toBe(error);
-  });
+  it.each(['SecurityError', 'QuotaExceededError', 'InvalidStateError'])(
+    'reports %s as blocked, keeping the error',
+    async (name) => {
+      const error = new DOMException('denied', name);
+      vi.spyOn(db, 'open').mockRejectedValue(error);
+      const result = await openDatabase();
+      expect(result).toMatchObject({ ok: false, reason: 'blocked' });
+      if (!result.ok) expect(result.error).toBe(error);
+    },
+  );
 
   it('reports a plain Error as unknown, keeping the error', async () => {
     const error = new Error('boom');
     vi.spyOn(db, 'open').mockRejectedValue(error);
     const result = await openDatabase();
-    expect(result).toEqual({ ok: false, reason: 'unknown', error });
+    expect(result).toMatchObject({ ok: false, reason: 'unknown' });
     if (!result.ok) expect(result.error).toBe(error);
+  });
+
+  it('does not throw when the rejection is not an Error at all', async () => {
+    vi.spyOn(db, 'open').mockRejectedValue(null);
+    await expect(openDatabase()).resolves.toEqual({
+      ok: false, reason: 'unknown', error: null,
+    });
   });
 });

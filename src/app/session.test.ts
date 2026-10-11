@@ -24,4 +24,10 @@ describe('session', () => {
     const second = await ensureLocalUser();
     expect(second).toBe(first);
   });
+
+  it('hands concurrent first-run callers the same id', async () => {
+    const [a, b] = await Promise.all([ensureLocalUser(), ensureLocalUser()]);
+    expect(b).toBe(a);
+    expect(await getCurrentUserId()).toBe(a);
+  });
 });
