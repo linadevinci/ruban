@@ -2593,7 +2593,18 @@ export function Today({ userId }: { userId: string }) {
 - [ ] **Step 4: Run the tests**
 
 Run: `npm test -- Today`
-Expected: PASS, 4 tests.
+Expected: PASS, 4 tests from the block above **plus the four this task owes**, below.
+
+**Four tests is not enough for the screen the whole app exists to show, and one of the gaps is a requirement this task's own prose claims to own.**
+
+1. **The joker's rule 6** — the debt carried from Plan 1. The prose at the top of this task says this task owns it, and then the test list above does not contain a joker test at all: the same "requirement with no owning step" defect as `openDatabase`, which sat unwired through two whole tasks. Pin that spending the joker writes to **the excused date's** ISO week, not to today's. Drive it on a Sunday/Monday boundary, which is the only case that discriminates: ISO weeks start on Monday, so a Sunday belongs to the week that is already closing. Mock the clock to a Sunday, spend the joker, and assert the `weekPlans` row written is that Sunday's week.
+2. **The bonus fires exactly once.** Task 8 made the stamping atomic and Task 9 built the shower and the fanfare; this task wires them, and nothing yet tests the wire. Complete the last item of a day and assert `Confetti` becomes active and the fanfare plays once — then assert a re-render does not fire either again. StrictMode double-invokes the effect, which is the ordinary case rather than a rare race.
+3. **A validated day renders as validated** — the `today__done` message — and stays that way after a tick is removed, because `validatedAt` is a stamp and is never cleared.
+4. **The steps input rejects what is not a number** (see the defect below).
+
+**Defect in the code block above: `Number(raw)` is unvalidated, and writes `NaN` to the database.** `inputMode="numeric"` is a keyboard hint, not a constraint — it does nothing on a desktop keyboard and nothing against a paste. `Number('abc')` is `NaN`, which goes straight into `dayLogs.steps`, and from there `NaN >= stepTarget` is false forever, so the steps item can never be satisfied again on that day and the field renders as `NaN`. This is exactly the onboarding defect from Task 6, where `Number('')` and `Number('abc')` were written into the one settings row every screen reads. Guard it the way `Onboarding` does: parse, and ignore the keystroke unless the result is a finite number greater than or equal to zero. Reject a negative step count too.
+
+**Recorded for Plan 4, not to be fixed here:** this input writes on every keystroke, so typing `8200` enqueues four outbox rows for one number. Correct under last-write-wins, but four pushes where one would do, on a free-tier budget. Plan 4's push should coalesce the outbox by `table + rowId`, keeping only the newest entry per row.
 
 - [ ] **Step 5: Commit**
 

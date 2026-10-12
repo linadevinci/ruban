@@ -14,6 +14,7 @@
 
 ## Global Constraints
 
+- **Coalesce the outbox by `table + rowId` before pushing, keeping only the newest entry per row.** Plan 2's amount inputs write on every keystroke, so typing a four-digit step count enqueues four rows for one logical change. All four are correct under last-write-wins and three are wasted round trips on a free-tier budget. Ordering still comes from `seq`.
 Plan 1's Global Constraints apply in full. Added here:
 - **The escape rule, as sharpened during Plan 2:** escape the characters that look like an ASCII neighbour (U+202F, U+00A0, U+2212, U+2014, U+2019, U+2026, U+00B7); write accented letters literally (`départ`, not an escape), because they are visibly distinct and cannot be silently substituted. Code comments stay ASCII. Plan 2's Global Constraints carry the full statement.
 
