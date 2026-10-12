@@ -75,9 +75,10 @@ export function buildTodayView(input: TodayInputs): TodayView {
   const coverage = input.dayLogs.map((row) => ({
     date: row.date, validatedAt: row.validatedAt, jokered: row.jokered,
   }));
-  // The current day's own row may not be in dayLogs yet: the hook reads it
-  // with getDayLog and lists the rest with listDayLogs, as two concurrent
-  // reads, and on a day with no stored row it is a placeholder besides.
+  // listDayLogs lists them all, today's row included, so this push is usually
+  // a duplicate - and an idempotent one, because currentStreak reduces the
+  // coverage to a Set of dates. It is here for the day that has no stored row
+  // at all: `log` is then blankDayLog's placeholder, which no list can supply.
   coverage.push({ date, validatedAt: log.validatedAt, jokered: log.jokered });
 
   return {
@@ -106,10 +107,16 @@ export function buildTodayView(input: TodayInputs): TodayView {
  *
  * The id is deliberately an empty string, because this row does not exist in
  * the database: every write must key off `date`, which is what
- * updateDayLog(userId, date, patch) takes, and never off `view.log.id`. A
- * placeholder carrying the tombstoned row's id would send a later write to the
- * invisible row; one carrying a freshly minted id would mint a new one on
- * every re-run of the querier.
+ * updateDayLog(userId, date, patch) takes, and never off `view.log.id`. What
+ * the empty string buys is an id no caller can mistake for a real row's, where
+ * a tombstoned row's id would be indistinguishable from a live one, and no
+ * fresh id minted on every re-run of the querier.
+ *
+ * It buys no protection against a write reaching a tombstoned row. Writes look
+ * rows up by `[userId+date]`, which does not filter `deletedAt`, so a tick on
+ * a tombstoned day lands on the invisible row whatever id this carries. That
+ * is unreachable until the sync phase can tombstone a day log, and the fix
+ * belongs to the repo layer rather than here.
  */
 export function blankDayLog(userId: string, date: IsoDate): DayLog {
   return {
@@ -153,6 +160,9 @@ export function useToday(userId: string): TodayView | undefined {
       date, settings, plan, log: log ?? blankDayLog(userId, date), dayLogs,
       runsToday: runs.filter((r) => r.date === date),
       calorieEntriesToday: calorieEntries.filter((e) => e.date === date),
+      // This one keeps the input contract at the top of the file rather than
+      // changing a result: weekCalorieTotal filters by the same week, so no
+      // test can tell the filtered list from the unfiltered one.
       calorieEntriesWeek: calorieEntries.filter((e) => weekDates.has(e.date)),
     });
   }, [userId]);
