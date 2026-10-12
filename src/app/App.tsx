@@ -1,6 +1,7 @@
 import { useLiveQuery } from 'dexie-react-hooks';
 import { useEffect, useState } from 'react';
 import { BrowserRouter, Route, Routes } from 'react-router';
+import { ErrorBoundary } from '@/app/ErrorBoundary';
 import { getCurrentUserId } from '@/app/session';
 import { TabBar } from '@/app/TabBar';
 import { getSettings } from '@/db/repos';
@@ -64,33 +65,21 @@ function StorageFailure({ reason }: { reason: 'blocked' | 'unknown' }) {
   );
 }
 
-export function App() {
-  // 'opening' until openDatabase resolves; then the result. Separate from the
-  // useLiveQuery state below, which must not be trusted until this is ok.
-  //
-  // In an effect and never inside the querier: db.open() runs any pending
-  // schema upgrade, and an upgrade writes, which Dexie's observability
-  // middleware rejects in a liveQuery context (ReadOnlyError). That would fire
-  // only on the devices that need the migration - real users, never a fresh
-  // test database.
-  const [open, setOpen] = useState<OpenResult | 'opening'>('opening');
-  useEffect(() => {
-    let cancelled = false;
-    void openDatabase().then((result) => { if (!cancelled) setOpen(result); });
-    return () => { cancelled = true; };
-  }, []);
-
+/**
+ * Everything that reads the database, mounted only once the open gate has
+ * passed. The split is the point: `useLiveQuery` cannot be called
+ * conditionally, and dexie-react-hooks RETHROWS a rejected querier during
+ * render. On a device that blocks storage every repo read rejects, so a
+ * querier subscribed above the gate takes the shell down - blank page - before
+ * the gate can say why. Mounting the hook's component below the gate is the
+ * only way to leave it unsubscribed until the database is known to be open.
+ */
+function OpenShell() {
   const state = useLiveQuery(async () => {
     const userId = await getCurrentUserId();
     if (!userId) return { userId: null, hasSettings: false };
     return { userId, hasSettings: (await getSettings(userId)) !== undefined };
   }, []);
-
-  // Three states, not two. While the open is in flight the querier may well
-  // have resolved against an implicitly opened database, and on a device that
-  // blocks storage it never resolves at all - so the gate decides first.
-  if (open === 'opening') return <Opening />;
-  if (!open.ok) return <StorageFailure reason={open.reason} />;
 
   if (!state) return <Opening />;
 
@@ -114,5 +103,40 @@ export function App() {
       </div>
       <TabBar />
     </BrowserRouter>
+  );
+}
+
+function Shell() {
+  // 'opening' until openDatabase resolves; then the result. Nothing that reads
+  // the database exists in the tree until this is ok.
+  //
+  // In an effect and never inside a querier: db.open() runs any pending schema
+  // upgrade, and an upgrade writes, which Dexie's observability middleware
+  // rejects in a liveQuery context (ReadOnlyError). That would fire only on
+  // the devices that need the migration - real users, never a fresh test
+  // database.
+  const [open, setOpen] = useState<OpenResult | 'opening'>('opening');
+  useEffect(() => {
+    let cancelled = false;
+    void openDatabase().then((result) => { if (!cancelled) setOpen(result); });
+    return () => { cancelled = true; };
+  }, []);
+
+  // Three states, not two. The gate decides before anything subscribes to the
+  // database, so a store that blocks or rejects reaches its own panel.
+  if (open === 'opening') return <Opening />;
+  if (!open.ok) return <StorageFailure reason={open.reason} />;
+
+  return <OpenShell />;
+}
+
+export function App() {
+  // The backstop under which the whole shell runs. 'unknown' is the honest
+  // reason here: a render threw for a cause the gate never classified, and its
+  // copy says so without claiming the data is gone.
+  return (
+    <ErrorBoundary fallback={<StorageFailure reason="unknown" />}>
+      <Shell />
+    </ErrorBoundary>
   );
 }
