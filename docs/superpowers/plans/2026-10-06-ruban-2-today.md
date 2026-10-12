@@ -2632,6 +2632,32 @@ The shell must `await openDatabase()` before it gates on `getCurrentUserId`/`get
 
 **Call it from a `useEffect` with `useState`, never from inside the `useLiveQuery` querier.** `db.open()` runs any pending schema upgrade, and an upgrade writes — which is the `ReadOnlyError` trap in the Global Constraints all over again, except it would only fire on the devices that happen to need the migration, i.e. existing users and never a fresh test database. The gate must resolve before the querier's result is trusted, so the shell has three states and not two: still opening, failed to open, and open.
 
+**The code block below does not do any of this, and the test list does not cover it. Both need extending — do not simply transcribe them.** I added the requirement above as prose and left the block and the tests untouched, which is precisely the defect the requirement is about. Said plainly so the next reader does not transcribe a block that is knowingly incomplete.
+
+The shell therefore holds two independent pieces of state:
+
+```tsx
+// 'opening' until openDatabase resolves; then the result. Separate from the
+// useLiveQuery state below, which must not be trusted until this is ok.
+const [open, setOpen] = useState<OpenResult | 'opening'>('opening');
+useEffect(() => {
+  let cancelled = false;
+  void openDatabase().then((result) => { if (!cancelled) setOpen(result); });
+  return () => { cancelled = true; };
+}, []);
+
+if (open === 'opening') return <div className="app"><p>Un instant\u2026</p></div>;
+if (!open.ok) return <StorageBlocked reason={open.reason} />;
+// Only now is the querier's result meaningful.
+```
+
+`StorageBlocked` is French copy, not a stack trace: on `'blocked'` say the browser is preventing Ruban from saving anything and that private browsing is the usual reason; on `'unknown'` say something went wrong opening her data and suggest reloading. Neither message should read as though her data is lost, because it is not — it is unreachable from this browsing context.
+
+**Two tests this task owes beyond the three in the block**, both by stubbing `openDatabase` with `vi.mock` so it resolves to each failure shape:
+
+5. `{ ok: false, reason: 'blocked' }` renders the storage-blocked copy, and renders neither onboarding nor the Today screen. Prove it discriminates by also asserting the blocked copy is **absent** on the success path — otherwise a component that always renders it would pass.
+6. `{ ok: false, reason: 'unknown' }` renders the generic copy rather than the blocked copy. The two branches must be distinguishable in the DOM; if they render identical text, no test can tell them apart and the `reason` field is decorative — the same defect as Task 9's two `Confetti` branches, which both rendered an anonymous `motion.div`.
+
 - [ ] **Step 1: Write the failing test**
 
 ```ts
@@ -2811,7 +2837,7 @@ createRoot(document.getElementById('root')!).render(
 - [ ] **Step 4: Run the tests and the whole suite**
 
 Run: `npm test -- App`
-Expected: PASS.
+Expected: PASS, 5 tests — the three in the block plus the two open-failure branches.
 
 Run: `npm test && npx tsc -b`
 Expected: everything PASS, no type errors.
