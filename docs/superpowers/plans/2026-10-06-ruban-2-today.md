@@ -57,6 +57,7 @@ runtime database consumer — and all become reachable the moment a screen opens
 
 ## Global Constraints
 
+- **Never assert a value is present with `.not.toBeNull()` on an optionally-chained read.** `expect((await getDayLog(u, d))?.validatedAt).not.toBeNull()` **passes when the row does not exist at all**, because `?.` yields `undefined` and `undefined` is not `null`. So a test meant to prove a write happened goes green against code that writes nothing. This was caught in Task 8 by a put-removal mutation that stayed green. Assert the type or the value instead — `expect(typeof x).toBe('string')`, or `expect(x).toBe(expected)` — both of which fail on `undefined`. The same trap applies to `.toBeTruthy()`, `.not.toBeUndefined()` on a `?.` chain, and `expect(rows.find(p)).not.toBeNull()`.
 - **Never call a `getOrCreate*` repo function inside a `useLiveQuery` querier, or inside anything a querier awaits.** Every `getOrCreate*` opens `db.transaction('rw', ...)`, and Dexie's observability middleware throws `ReadOnlyError: Readwrite transaction in liveQuery context` on any non-readonly transaction in a querier — unconditionally, even when the row already exists and nothing would actually be written. The querier rejects, `useLiveQuery` stays `undefined` forever, and the screen never renders. **This is not theoretical: it shipped in Task 7 and made the Today screen unrenderable while 209 tests passed**, because every test exercised the pure view model and none exercised the hook. Read with the read-only accessor (`getDayLog`, `getWeekPlan`), resolve display defaults through a pure function, and let the `update*` form create the row on the first real edit — all of them already do `existing ?? newRow`.
   There is a second, independent reason, which Plan 3 states for the week planner and which I failed to carry back here: a reactive read that writes to the table it observes invents data nobody entered, and queues a sync push for a row the user never touched. Merely opening the app should not be a syncable event.
   **Any screen with a `useLiveQuery` needs at least one test that renders the hook and asserts a defined result.** Testing the pure view model alone cannot catch this class of failure.
@@ -1936,48 +1937,115 @@ So `syncStamps` must not decide from the view. Add a repo function that does the
 ```ts
 import 'fake-indexeddb/auto';
 import { beforeEach, describe, expect, it } from 'vitest';
+import { getDayLog, updateDayLog } from '@/db/repos';
 import { db } from '@/db/schema';
-import { getOrCreateDayLog } from '@/db/repos';
 import { syncStamps } from '@/features/today/stamps';
 import type { TodayView } from '@/features/today/useToday';
+
+const DATE = '2026-10-06';
+/** An earlier instant than any nowIso() this run can return, so a re-stamp shows. */
+const EARLIER = '2026-10-06T19:00:00.000Z';
 
 beforeEach(async () => {
   await db.open();
   await Promise.all([db.dayLogs.clear(), db.outbox.clear()]);
 });
 
-async function view(validated: boolean): Promise<TodayView> {
-  const log = await getOrCreateDayLog('u1', '2026-10-06');
-  return { date: '2026-10-06', log, validated } as unknown as TodayView;
+/**
+ * Only the two fields syncStamps reads. The narrowed parameter type is what
+ * lets this be a real value rather than a cast through unknown: a cast would
+ * keep compiling after a field was added to or removed from TodayView.
+ */
+function view(validated: boolean): Pick<TodayView, 'date' | 'validated'> {
+  return { date: DATE, validated };
 }
 
 describe('syncStamps', () => {
   it('does nothing while the day is incomplete', async () => {
-    const result = await syncStamps('u1', await view(false));
+    const result = await syncStamps('u1', view(false));
     expect(result).toEqual({ validatedNow: false, fireBonus: false });
-    const log = await getOrCreateDayLog('u1', '2026-10-06');
-    expect(log.validatedAt).toBeNull();
+    // Not even a row: an unfinished day the user only looked at is not an event.
+    expect(await getDayLog('u1', DATE)).toBeUndefined();
+    expect(await db.dayLogs.count()).toBe(0);
+    expect(await db.outbox.count()).toBe(0);
   });
 
   it('stamps validatedAt and fires the bonus on first completion', async () => {
-    const result = await syncStamps('u1', await view(true));
+    const result = await syncStamps('u1', view(true));
     expect(result).toEqual({ validatedNow: true, fireBonus: true });
-    const log = await getOrCreateDayLog('u1', '2026-10-06');
-    expect(log.validatedAt).not.toBeNull();
-    expect(log.bonusFiredAt).not.toBeNull();
+    const log = await getDayLog('u1', DATE);
+    // typeof, not not.toBeNull(): on a row that was never written log is
+    // undefined, and expect(undefined).not.toBeNull() passes.
+    expect(typeof log?.validatedAt).toBe('string');
+    expect(typeof log?.bonusFiredAt).toBe('string');
+    expect(await db.outbox.count()).toBe(1);
   });
 
   it('never fires the bonus twice', async () => {
-    await syncStamps('u1', await view(true));
-    const again = await syncStamps('u1', await view(true));
-    expect(again.fireBonus).toBe(false);
+    const first = await syncStamps('u1', view(true));
+    const again = await syncStamps('u1', view(true));
+    expect(first.fireBonus).toBe(true);
+    expect(again).toEqual({ validatedNow: false, fireBonus: false });
   });
 
   it('never clears validatedAt once stamped', async () => {
-    await syncStamps('u1', await view(true));
-    await syncStamps('u1', await view(false));
-    const log = await getOrCreateDayLog('u1', '2026-10-06');
-    expect(log.validatedAt).not.toBeNull();
+    await syncStamps('u1', view(true));
+    const stamped = (await getDayLog('u1', DATE))?.validatedAt;
+    expect(typeof stamped).toBe('string');
+    // A raised target can stop the day evaluating as validated; the stamp it
+    // earned stays, because stamps record what happened (spec 4.3).
+    await syncStamps('u1', view(false));
+    expect((await getDayLog('u1', DATE))?.validatedAt).toBe(stamped);
+  });
+
+  it('fires the bonus exactly once when two calls race', async () => {
+    // The realistic setup: the last tick created the row, and Task 10 then
+    // calls syncStamps from an effect that StrictMode double-invokes, so two
+    // calls are in flight before either has written. Deciding from a value
+    // read before the transaction - view.log, or any read in its own
+    // transaction - lets both see validatedAt: null and both fire.
+    await updateDayLog('u1', DATE, { ticks: { course: true } });
+    await db.outbox.clear();
+
+    const results = await Promise.all([
+      syncStamps('u1', view(true)),
+      syncStamps('u1', view(true)),
+    ]);
+
+    expect(results.filter((r) => r.fireBonus)).toHaveLength(1);
+    expect(results.filter((r) => r.validatedNow)).toHaveLength(1);
+    expect(await db.dayLogs.count()).toBe(1);
+    // One real write, so one sync push.
+    expect(await db.outbox.count()).toBe(1);
+  });
+
+  it('does not move the validatedAt a previous call already wrote', async () => {
+    await syncStamps('u1', view(true));
+    const stamped = (await getDayLog('u1', DATE))?.validatedAt;
+    expect(await db.outbox.count()).toBe(1);
+
+    const again = await syncStamps('u1', view(true));
+
+    expect(again).toEqual({ validatedNow: false, fireBonus: false });
+    // nowIso() never repeats a value, so a re-stamp would read as a strictly
+    // later string here.
+    expect((await getDayLog('u1', DATE))?.validatedAt).toBe(stamped);
+    // And a second outbox row would be a sync push for a day nothing changed on.
+    expect(await db.outbox.count()).toBe(1);
+  });
+
+  it('records a missing bonus without moving an already stamped validatedAt', async () => {
+    // A day validated earlier whose bonus never fired - a sync pull can
+    // deliver exactly this. Only the null field may be filled.
+    await updateDayLog('u1', DATE, { validatedAt: EARLIER });
+    await db.outbox.clear();
+
+    const result = await syncStamps('u1', view(true));
+
+    expect(result).toEqual({ validatedNow: false, fireBonus: true });
+    const log = await getDayLog('u1', DATE);
+    expect(log?.validatedAt).toBe(EARLIER);
+    expect(typeof log?.bonusFiredAt).toBe('string');
   });
 });
 ```
@@ -1990,8 +2058,7 @@ Expected: FAIL — module not found.
 - [ ] **Step 3: Implement**
 
 ```ts
-import { nowIso } from '@/db/ids';
-import { updateDayLog } from '@/db/repos';
+import { stampDayLog } from '@/db/repos';
 import type { TodayView } from '@/features/today/useToday';
 
 export interface StampResult {
@@ -2001,31 +2068,39 @@ export interface StampResult {
 
 /**
  * Stamps are facts about what happened; targets are settings. So validatedAt
- * is written once and never cleared, and the bonus fires exactly once.
+ * is written once and never cleared or moved - a step target raised in
+ * November cannot retroactively un-validate October - and the celebration
+ * fires exactly once (spec 4.3 and 4.5).
+ *
+ * The view decides only WHETHER the day is validated right now. Which stamps
+ * this call applied comes from the stored row, inside stampDayLog's single
+ * transaction, never from view.log: that is a snapshot from the last querier
+ * run, so two calls in flight together would both read validatedAt: null from
+ * it and both return fireBonus: true. Task 10 calls this from an effect that
+ * StrictMode double-invokes, which makes that the ordinary case rather than a
+ * rare race.
+ *
+ * This writes, so it is safe in an effect and never in a useLiveQuery querier,
+ * where Dexie rejects any readwrite transaction.
  */
-export async function syncStamps(userId: string, view: TodayView): Promise<StampResult> {
+export async function syncStamps(
+  userId: string,
+  view: Pick<TodayView, 'date' | 'validated'>,
+): Promise<StampResult> {
+  // Nothing to stamp, and nothing to clear either: a day that stops evaluating
+  // as validated keeps the stamp it earned. Returning before the write is also
+  // what keeps merely opening the app on an unfinished day from creating a row.
   if (!view.validated) return { validatedNow: false, fireBonus: false };
-
-  const alreadyValidated = view.log.validatedAt !== null;
-  const alreadyFired = view.log.bonusFiredAt !== null;
-  if (alreadyValidated && alreadyFired) {
-    return { validatedNow: false, fireBonus: false };
-  }
-
-  const stamp = nowIso();
-  await updateDayLog(userId, view.date, {
-    validatedAt: view.log.validatedAt ?? stamp,
-    bonusFiredAt: view.log.bonusFiredAt ?? stamp,
-  });
-
-  return { validatedNow: !alreadyValidated, fireBonus: !alreadyFired };
+  return stampDayLog(userId, view.date);
 }
 ```
 
 - [ ] **Step 4: Run the tests**
 
 Run: `npm test -- stamps`
-Expected: PASS.
+Expected: PASS, 7 tests, plus the `stampDayLog` cases in `repos.test.ts`.
+
+**These blocks are the shipped files, which differ from what this task originally specified.** The original `syncStamps` decided from `view.log` and would have fired the bonus twice; the atomic `stampDayLog` in `src/db/repos.ts` replaced it. Verified by mutation: moving the read outside the transaction makes the race test report two fires.
 
 - [ ] **Step 5: Commit**
 
@@ -2040,7 +2115,7 @@ git commit -m "feat: stamp day validation and fire the bonus once"
 
 **Files:**
 - Create: `src/ui/reward.ts`, `src/ui/Confetti.tsx`
-- Test: `src/ui/reward.test.ts`
+- Test: `src/ui/reward.test.ts`, `src/ui/Confetti.test.tsx`, `src/ui/Confetti.reducedMotion.test.tsx`
 
 **Interfaces:**
 - Produces:
@@ -2049,6 +2124,14 @@ git commit -m "feat: stamp day validation and fire the bonus once"
   - `<Confetti active />` — a one-shot shower of bows and hearts
 
 Synthesised through the Web Audio API rather than shipped as a file: nothing to download, nothing to cache, and no CSP question. Both functions return immediately when `enabled` is false, so the default-off sound setting costs nothing.
+
+**`Confetti`'s reduced-motion branch needs its own test file, and I originally listed no `Confetti` test at all.** This is Task 3's defect repeating: framer-motion reads `prefers-reduced-motion` once and caches it behind a module-level guard, so `matchMedia` must be stubbed *before the module is first imported*. Vitest gives each test file its own module registry, which makes a dedicated file the only way to exercise the branch — in Task 3 the first attempt at an in-file test passed against a deliberately broken branch, and the implementer deleted it rather than ship it. So:
+
+- `src/ui/Confetti.reducedMotion.test.tsx` stubs `matchMedia` to report `prefers-reduced-motion: reduce` at the very top, before any import of `Confetti`, and asserts the single soft pulse renders and the shower does not.
+- `src/ui/Confetti.test.tsx` covers the ordinary path: `active` false renders nothing, `active` true renders the shower.
+- **Prove each file discriminates by breaking the branch it covers**, exactly as Task 3 did. A reduced-motion test that passes whichever branch runs is worse than no test, because it reads as coverage.
+
+**`reward.ts` owes the negative case too:** `playTick(false)` and `playFanfare(false)` must construct no `AudioContext` at all. Assert that by spying on the constructor and expecting zero calls — not by checking the functions returned `undefined`, which they do either way. The sound setting defaults to off, so the disabled path is the one that runs for every user until she turns it on.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -2206,7 +2289,8 @@ Expected: PASS.
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/ui/reward.ts src/ui/reward.test.ts src/ui/Confetti.tsx
+git add src/ui/reward.ts src/ui/reward.test.ts src/ui/Confetti.tsx \
+  src/ui/Confetti.test.tsx src/ui/Confetti.reducedMotion.test.tsx
 git commit -m "feat: add synthesised reward sounds and the bow shower"
 ```
 
