@@ -73,7 +73,7 @@ Identical to Plan 1's Global Constraints section — read it there; every item a
 - **Every text input sets `font-size: 16px` or larger.** The body scale is 0.95rem (~15.2px), and an input inheriting it makes iOS Safari zoom the page on focus — which on a one-handed checklist app reads as the layout jumping every time you tap a field.
 - **`--rose` is a fill, never text** (1.75:1 on the ground). `--cerise` is the text accent.
 - **Write every *confusable or invisible* character as a `\u` escape, and copy the escape sequence verbatim rather than resolving it to the character it denotes.** The ones that matter are the ones that look like an ASCII neighbour: U+202F narrow no-break space and U+00A0 no-break space (both look like a space), U+2212 minus and U+2014 em dash (both look like a hyphen), U+2019 right single quote (looks like an apostrophe), U+2026 ellipsis (looks like three dots) and U+00B7 middle dot. A literal is invisible in a diff and one normalisation away from becoming its ASCII lookalike. **The cause is the tooling, not carelessness, and I verified it directly: writing a single `\uXXXX` through either the file-writing tool or a shell heredoc lands the resolved character on disk, not the escape.** A quoted heredoc cannot be doing that, so the resolution happens above the shell. Only a *doubled* `\\uXXXX` in the command reaches disk as a real escape sequence. So I must withdraw an attribution: I recorded a defect against an implementer for "resolving an escape while transcribing" when it was handed `{'\u2212'}`, and this mechanism almost certainly did it. The two occasions I wrote literals into the plan myself were the same thing.
-  **The practical rules:** double every escape when writing a file through a tool, and then **verify the bytes** — a byte scan is the only check that catches this, because the runtime value is identical either way and every test still passes. `LC_ALL=C grep -nP '[^\x00-\x7F]' <file>` should show nothing but accented letters in French copy.
+  **The recipe is path-dependent, and "just double it" is wrong for one path — I verified both.** Writing `\\uXXXX` *directly* into a source file (a heredoc, or a file-writing tool) lands **two** backslashes on disk, which in a TypeScript string is a literal backslash followed by `uXXXX`, not an escape at all: broken, and it type-checks. Writing `\\uXXXX` *through Python* lands one backslash plus `uXXXX`, a real escape: correct, because Python's own string unescaping collapses the doubling. So either write the file with Python, or write it doubled and then collapse with `LC_ALL=C sed -i 's/\\\\u/\\u/g'` — the sed text itself survives, since the resolver only rewrites un-escaped sequences. Then, whichever path, **verify the bytes** — a byte scan is the only check that catches this, because the runtime value is identical either way and every test still passes. `LC_ALL=C grep -nP '[^\x00-\x7F]' <file>` should show nothing but accented letters in French copy.
   **Accented letters are the exception and stay literal**: write `Poids de départ`, not `Poids de d\u00e9part`. An `é` is visibly distinct from any ASCII character, so it cannot be silently substituted, and escaping it would make every French string in the app unreadable. The shipped code already follows this split — literal accents, escaped `\u2019`. Code comments stay ASCII throughout, accents included.
 - **Sound defaults off** (`settings.soundEnabled === false`).
 - **No rule logic in components.** Components call `@/domain/*`.
@@ -3125,6 +3125,8 @@ if (!open.ok) return <StorageBlocked reason={open.reason} />;
 
 **Two tests this task owes beyond the three in the block**, both by stubbing `openDatabase` with `vi.mock` so it resolves to each failure shape:
 
+**These five do not cover the plan's own stated requirement that "the gate must resolve before the querier's result is trusted", and a sixth test is needed.** Moving the open gate *below* `if (!state)` leaves all five green, because a test database always opens, so the querier always resolves and the ordering is invisible. The case that sees it reproduces a real blocked device, where the querier never resolves at all: mock `getCurrentUserId` to return a never-resolving promise and assert the blocked panel still appears. Without it, the shell could render a spinner forever on exactly the devices this precondition exists for.
+
 5. `{ ok: false, reason: 'blocked' }` renders the storage-blocked copy, and renders neither onboarding nor the Today screen. Prove it discriminates by also asserting the blocked copy is **absent** on the success path — otherwise a component that always renders it would pass.
 6. `{ ok: false, reason: 'unknown' }` renders the generic copy rather than the blocked copy. The two branches must be distinguishable in the DOM; if they render identical text, no test can tell them apart and the `reason` field is decorative — the same defect as Task 9's two `Confetti` branches, which both rendered an anonymous `motion.div`.
 
@@ -3324,6 +3326,8 @@ git commit -m "feat: add app shell, routing and the bottom tab bar"
 
 ### Task 12: Use it for real
 
+
+**Sweep the Vite template's leftovers first.** `src/assets/hero.png`, `src/assets/react.svg`, `src/assets/vite.svg` and `public/icons.svg` were referenced only by the template `src/App.tsx` that Task 11 deleted, and nothing references them now. `vite build` tree-shakes what is not imported, so they cost nothing shipped — but they are dead files in a public repository. Confirm with `grep -rln` over `src` and `index.html` before deleting, and leave `public/favicon.svg`, which `index.html` still uses.
 Not a code task. The point of Plan 2 is that the app becomes usable, and that claim needs checking against a real device before Plan 3 starts.
 
 - [ ] **Step 1: Deploy**
@@ -3358,7 +3362,7 @@ git commit -m "docs: record first-use feedback on the Today screen"
 ## Plan 2 Done When
 
 - `npm test` and `npx tsc -b` are clean.
-- No component imports from `src/db/schema` directly — only through `src/db/repos` or a hook.
+- No component touches a **table** from `src/db/schema` — table access goes through `src/db/repos` or a hook, so nothing bypasses the repos' `updatedAt` stamping and outbox push. `src/app/App.tsx` importing `openDatabase` is the one allowed exception and is not really one: `openDatabase` touches no table, it is the open gate itself, and the shell is by definition the only place that can run it. I first wrote this line as "no component imports from `src/db/schema` directly", which Task 11 then had to violate to satisfy its own brief — the rule's purpose was always about table access, so it now says that.
 - Verify no rule logic leaked into components: `grep -rE "(noDinnerDays|runDays)\.includes" src/features/` returns nothing.
 - Both themes render legibly, and `prefers-reduced-motion` replaces the bow shower with a pulse.
 - The app is installed on your phone and you have validated at least one real day.
