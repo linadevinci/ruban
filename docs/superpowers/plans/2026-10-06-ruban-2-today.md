@@ -3538,3 +3538,70 @@ git commit -m "docs: record first-use feedback on the Today screen"
 - Verify no rule logic leaked into components: `grep -rE "(noDinnerDays|runDays)\.includes" src/features/` returns nothing.
 - Both themes render legibly, and `prefers-reduced-motion` replaces the bow shower with a pulse.
 - The app is installed on your phone and you have validated at least one real day.
+
+### Task 13: Excuse yesterday with the joker
+
+**Depends on Task 12's fix round:** uses `spendJoker(userId, date)`, the single-transaction repo
+function added there. Do not re-implement the two-write version.
+
+**Files:**
+- Modify: `src/features/today/useToday.ts`, `src/features/today/StreakCard.tsx`,
+  `src/features/today/Today.tsx`
+- Test: `src/features/today/useToday.test.ts`, `src/features/today/Today.test.tsx`
+
+**Why this task exists.** Spec §2 and §4.4 both say the joker is "usable on today or
+yesterday only", and nothing in five plans ever implemented the second half. `canUseJoker` has
+carried an `age <= 1` branch since Plan 1 that no caller can reach, because every call site passes
+`date, today: date`. The user-visible gap is the one case the joker exists for: a day missed at
+23h59 breaks the streak permanently, with no way back. The user chose to implement it rather than
+narrow the spec.
+
+**It also carries the joker's rule 6 debt, which has been undischargeable until now.** Rule 6: the
+week whose `jokerUsedOn` is consulted and written must be that of the date being **excused**, not
+today's week. Every existing caller has `date === today`, so the two weeks are identical by
+construction and no test could tell a correct implementation from a wrong one. This task creates
+the first caller where they differ, so this is where the test finally lands.
+
+**The discriminating case, and the whole point of the task:** excusing **Sunday** from the
+following **Monday**. ISO weeks start on Monday, so that Sunday belongs to the week that has already
+closed. A correct implementation reads and writes the *previous* week's plan; the natural wrong
+implementation uses today's. Both behave identically on every other day of the week.
+
+**Interfaces:**
+- `TodayView` gains `yesterdayExcusable: boolean` and `yesterday: IsoDate`.
+- `StreakCard` gains an `onExcuseYesterday` callback, rendered only when `yesterdayExcusable`.
+
+**The part that is easy to get wrong:** the view model currently reads one week plan, today's. To
+decide whether yesterday can be excused it must consult **yesterday's** week plan, which is a
+different row whenever today is a Monday. Read both (they coincide on six days in seven, so read
+once and reuse when the keys match), and pass yesterday's `jokerUsedOn` to `canUseJoker` alongside
+`date: yesterday, today: date`. Both reads stay read-only — `getWeekPlan`, never
+`getOrCreateWeekPlan`, per the first Global Constraint.
+
+**Tests owed:**
+
+1. **Rule 6, the Monday/Sunday boundary.** With the clock on Monday 2026-10-12, excusing Sunday
+   2026-10-11 must write `jokerUsedOn` to **`2026-W41`**, not `2026-W42`. Prove it discriminates by
+   changing the call to use today's week and watching it fail — if the test passes against
+   `isoWeekOf(date)`, it is not testing rule 6 and the debt is still open.
+2. **Rule 6 the other way:** a joker already spent in yesterday's week blocks excusing yesterday,
+   *even when this week's joker is unspent*. On a Monday those are two different rows, and this is
+   the assertion that catches a one-row implementation.
+3. **The offer is withheld** when yesterday is already covered (validated or jokered), when
+   yesterday precedes `settings.startDate`, and when `age > 1` — the day before yesterday is
+   never excusable.
+4. **Excusing yesterday repairs the streak**: a validated day before yesterday, an unvalidated
+   yesterday, a validated today, streak 1 before and 3 after.
+5. **One transaction:** after excusing, yesterday's log is `jokered` and that week's plan carries
+   `jokerUsedOn`. Assert both, so a half-completed spend fails.
+
+**Copy.** French, and the tone matters: the existing card says
+`Un impr\u00e9vu\u202f? Il te reste ton joker de la semaine.` on *every* uncovered day, which at
+08:00 means the app has decided she already failed. Reword so today's offer reads as reassurance
+held in reserve rather than a verdict, and give the yesterday action its own label naming the day
+it would excuse (`weekdayShort` or `longDate` from `src/ui/format.ts`). It must be unmistakable
+which day a tap excuses — spending the week's only joker on the wrong day is unrecoverable.
+
+**Done when:** rule 6 has a test that fails against `isoWeekOf(date)`; `canUseJoker`'s `age <= 1`
+branch is reachable from a screen; and no `getOrCreate*` appears in a querier.
+
