@@ -72,7 +72,8 @@ Identical to Plan 1's Global Constraints section — read it there; every item a
 - **Every animation respects `prefers-reduced-motion`,** degrading to a crossfade.
 - **Every text input sets `font-size: 16px` or larger.** The body scale is 0.95rem (~15.2px), and an input inheriting it makes iOS Safari zoom the page on focus — which on a one-handed checklist app reads as the layout jumping every time you tap a field.
 - **`--rose` is a fill, never text** (1.75:1 on the ground). `--cerise` is the text accent.
-- **Write every *confusable or invisible* character as a `\u` escape, and copy the escape sequence verbatim rather than resolving it to the character it denotes.** The ones that matter are the ones that look like an ASCII neighbour: U+202F narrow no-break space and U+00A0 no-break space (both look like a space), U+2212 minus and U+2014 em dash (both look like a hyphen), U+2019 right single quote (looks like an apostrophe), U+2026 ellipsis (looks like three dots) and U+00B7 middle dot. A literal is invisible in a diff and one normalisation away from becoming its ASCII lookalike. This has gone wrong three times: twice I wrote literals into the plan, and once an implementer was handed `{'\u2212'}` and wrote the glyph instead — which renders identically and so passes review unless someone greps bytes.
+- **Write every *confusable or invisible* character as a `\u` escape, and copy the escape sequence verbatim rather than resolving it to the character it denotes.** The ones that matter are the ones that look like an ASCII neighbour: U+202F narrow no-break space and U+00A0 no-break space (both look like a space), U+2212 minus and U+2014 em dash (both look like a hyphen), U+2019 right single quote (looks like an apostrophe), U+2026 ellipsis (looks like three dots) and U+00B7 middle dot. A literal is invisible in a diff and one normalisation away from becoming its ASCII lookalike. **The cause is the tooling, not carelessness, and I verified it directly: writing a single `\uXXXX` through either the file-writing tool or a shell heredoc lands the resolved character on disk, not the escape.** A quoted heredoc cannot be doing that, so the resolution happens above the shell. Only a *doubled* `\\uXXXX` in the command reaches disk as a real escape sequence. So I must withdraw an attribution: I recorded a defect against an implementer for "resolving an escape while transcribing" when it was handed `{'\u2212'}`, and this mechanism almost certainly did it. The two occasions I wrote literals into the plan myself were the same thing.
+  **The practical rules:** double every escape when writing a file through a tool, and then **verify the bytes** — a byte scan is the only check that catches this, because the runtime value is identical either way and every test still passes. `LC_ALL=C grep -nP '[^\x00-\x7F]' <file>` should show nothing but accented letters in French copy.
   **Accented letters are the exception and stay literal**: write `Poids de départ`, not `Poids de d\u00e9part`. An `é` is visibly distinct from any ASCII character, so it cannot be silently substituted, and escaping it would make every French string in the app unreadable. The shipped code already follows this split — literal accents, escaped `\u2019`. Code comments stay ASCII throughout, accents included.
 - **Sound defaults off** (`settings.soundEnabled === false`).
 - **No rule logic in components.** Components call `@/domain/*`.
@@ -2429,18 +2430,54 @@ git commit -m "feat: add synthesised reward sounds and the bow shower"
 
 French labels, exactly: `course` → "Course", `calories` → "Calories respectées", `no_dinner` → "Pas de dîner", `steps` → "Pas", `water` → "Eau".
 
+
+**Five defects in this task's brief were found while implementing it, and the blocks below are the shipped files.** Two I had already flagged (the `NaN`-writing input, the empty placeholder id). Three I had not: `Checklist.tsx` would not compile, because it imported `ChecklistItemId` from `@/domain/checklist`, which imports that type from `./types` without re-exporting it; the validated mark was rendered on `view.validated`, the *live* evaluation, which directly contradicts this task's own owed test that unticking an item must not remove the mark (spec 4.3 makes `validatedAt` the fact, so the condition reads from the stamp); and the brief's own test #2 could not pass against the brief's own markup, because `getByText('Pas')` is an exact match while the row's only text was `Pas · objectif 8000` — the name and the hint are now separate elements.
+
+I also had two claims probed and found false. My note that StrictMode's doubled mount makes a second `syncStamps` call the ordinary case is **wrong**: on the doubled mount `view` is still `undefined`, so the effect returns before calling it. Task 8's atomic stamping is still right, and its own concurrency test proves the race independently, but the reason I gave here was not the reason. The `cancelled` flag was dropped on a better argument than mine: where it could actually bite it would discard the single `fireBonus` the day will ever report, losing the celebration permanently. The real leak — the 2600 ms celebration timeout, never cleared — is now cleared on unmount.
+
 - [ ] **Step 1: Write the failing test**
 
 ```ts
 import 'fake-indexeddb/auto';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { beforeEach, describe, expect, it } from 'vitest';
-import { db } from '@/db/schema';
+import { StrictMode } from 'react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { saveSettings } from '@/db/repos';
+import { db } from '@/db/schema';
+import type { DayLog } from '@/domain/types';
 import { Today } from '@/features/today/Today';
 
+/**
+ * The fanfare leaves no trace in the DOM - reward.ts is silent in jsdom, which
+ * has no AudioContext, and silent again because sound defaults off - so
+ * counting it needs the module replaced. reward.ts has its own tests.
+ */
+const reward = vi.hoisted(() => ({ playTick: vi.fn(), playFanfare: vi.fn() }));
+vi.mock('@/ui/reward', () => reward);
+
+/** A Tuesday. Under the default week plan it is a run day and not a no-dinner evening. */
+const TUESDAY = '2026-10-06';
+/** Midday in Paris on that Tuesday. */
+const TUESDAY_NOON = new Date('2026-10-06T10:00:00Z');
+
+function log(partial: Partial<DayLog> = {}): DayLog {
+  return {
+    id: 'l1', userId: 'u1', date: TUESDAY, ticks: {}, steps: null, waterGlasses: null,
+    jokered: false, validatedAt: null, bonusFiredAt: null,
+    mood: null, energy: null, note: null,
+    updatedAt: '2026-10-06T09:00:00.000Z', deletedAt: null, ...partial,
+  };
+}
+
 beforeEach(async () => {
+  reward.playTick.mockClear();
+  reward.playFanfare.mockClear();
+  // Date only, so Testing Library's waitFor and userEvent keep real timers -
+  // and so the celebration's own setTimeout stays real and cannot fire inside
+  // a test.
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(TUESDAY_NOON);
   await db.open();
   await Promise.all([
     db.settings.clear(), db.dayLogs.clear(), db.weekPlans.clear(),
@@ -2453,6 +2490,13 @@ beforeEach(async () => {
     calorieFloor: 1200, stepTarget: 8000, waterTarget: 6,
     runSessionsTarget: 5, soundEnabled: false,
   });
+  // saveSettings queues its own push; cleared so every outbox count below is
+  // about what the screen wrote.
+  await db.outbox.clear();
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe('Today', () => {
@@ -2468,6 +2512,10 @@ describe('Today', () => {
     expect(await screen.findByRole('checkbox', { name: 'Calories respectées' })).toBeInTheDocument();
     expect(screen.getByText('Pas')).toBeInTheDocument();
     expect(screen.getByText('Eau')).toBeInTheDocument();
+    // Tuesday is a run day under the default plan and not a no-dinner evening,
+    // so one of the two optional items is here and the other is not.
+    expect(screen.getByRole('checkbox', { name: 'Course' })).toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', { name: 'Pas de dîner' })).not.toBeInTheDocument();
   });
 
   it('persists a manual tick', async () => {
@@ -2475,14 +2523,211 @@ describe('Today', () => {
     const box = await screen.findByRole('checkbox', { name: 'Calories respectées' });
     await userEvent.click(box);
     await waitFor(async () => {
-      const log = await db.dayLogs.toCollection().first();
-      expect(log?.ticks.calories).toBe(true);
+      const row = await db.dayLogs.toCollection().first();
+      expect(row?.ticks.calories).toBe(true);
     });
+    // The per-tick feedback is wired, and it is handed the stored setting
+    // rather than a hardcoded one; reward.ts decides whether that makes a
+    // sound, and sound defaults off.
+    expect(reward.playTick).toHaveBeenCalledWith(false);
+  });
+
+  it('counts the streak and agrees with it in French', async () => {
+    // Yesterday covered and today not, so the streak ends at yesterday.
+    await db.dayLogs.put(log({
+      id: 'l5', date: '2026-10-05', validatedAt: '2026-10-05T21:00:00.000Z',
+    }));
+
+    render(<Today userId="u1" />);
+    const streak = await screen.findByTestId('streak');
+    expect(await within(streak).findByText('1')).toBeInTheDocument();
+    // French puts one in the singular.
+    expect(within(streak).getByText("jour d'affilée")).toBeInTheDocument();
+
+    // A second covered day, delivered by the live query into the same card.
+    await db.dayLogs.put(log({
+      id: 'l4', date: '2026-10-04', validatedAt: '2026-10-04T21:00:00.000Z',
+    }));
+    expect(await within(streak).findByText('2')).toBeInTheDocument();
+    expect(within(streak).getByText("jours d'affilée")).toBeInTheDocument();
   });
 
   it('shows the weekly calorie remainder', async () => {
     render(<Today userId="u1" />);
-    expect(await screen.findByTestId('week-remaining')).toBeInTheDocument();
+    const panel = await screen.findByTestId('week-remaining');
+    // Nothing logged this week, so the remainder is the whole budget: five days
+    // at the daily target plus the two default no-dinner evenings (Wed, Sun).
+    // Read off textContent rather than toHaveTextContent, which would collapse
+    // the narrow no-break space in "9 300" to a plain space.
+    expect(panel.textContent).toContain('9\u202f300 kcal');
+  });
+
+  it('writes the joker to the ISO week of the day it excuses', async () => {
+    // Sunday 2026-10-11 is the LAST day of 2026-W41; the next day opens W42.
+    // ISO weeks start on Monday, so a Sunday is the one case that tells the
+    // excused date's week apart from any week read off the following day.
+    vi.setSystemTime(new Date('2026-10-11T10:00:00Z'));
+
+    render(<Today userId="u1" />);
+    await userEvent.click(await screen.findByRole('button', { name: 'Utiliser mon joker' }));
+
+    await waitFor(async () => { expect(await db.weekPlans.count()).toBe(1); });
+    const plan = (await db.weekPlans.toArray())[0];
+    expect(plan?.isoWeek).toBe('2026-W41');
+    expect(plan?.jokerUsedOn).toBe('2026-10-11');
+
+    const row = await db.dayLogs.toCollection().first();
+    expect(row?.date).toBe('2026-10-11');
+    expect(row?.jokered).toBe(true);
+    // The offer goes away: a jokered day is covered, and the week has one joker.
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: 'Utiliser mon joker' })).not.toBeInTheDocument();
+    });
+  });
+
+  it('fires the one-time bonus when the last item is ticked, and never twice', async () => {
+    // Everything satisfied but `course`, so one tap completes the day.
+    await db.dayLogs.put(log({ steps: 8200, waterGlasses: 6, ticks: { calories: true } }));
+
+    render(<StrictMode><Today userId="u1" /></StrictMode>);
+    await userEvent.click(await screen.findByRole('checkbox', { name: 'Course' }));
+
+    expect(await screen.findByTestId('confetti-shower')).toBeInTheDocument();
+    await waitFor(() => { expect(reward.playFanfare).toHaveBeenCalledTimes(1); });
+    const stamped = (await db.dayLogs.get('l1'))?.bonusFiredAt;
+    expect(typeof stamped).toBe('string');
+
+    // Another write, so another render of the whole screen. Waited on through
+    // the rendered value rather than through the row, because a wait that ends
+    // when the write lands can end before the re-render it causes - and then
+    // "nothing fired again" would be true only because nothing had happened
+    // yet.
+    await userEvent.click(screen.getByRole('button', { name: 'Augmenter Eau' }));
+    expect(await screen.findByText('7')).toBeInTheDocument();
+    expect((await db.dayLogs.get('l1'))?.waterGlasses).toBe(7);
+
+    expect(reward.playFanfare).toHaveBeenCalledTimes(1);
+    // nowIso() never repeats a value, so a second stamp would read as a
+    // strictly later string here.
+    expect((await db.dayLogs.get('l1'))?.bonusFiredAt).toBe(stamped);
+  });
+
+  it('fires the bonus once on a day that is already complete when the screen opens', async () => {
+    // The other way a day completes: not under the user's finger but before
+    // the screen was ever opened - the last item logged from another screen,
+    // or a day pulled in already finished. The stamping effect is then the
+    // only thing that can fire the celebration, and it must fire it once.
+    await db.dayLogs.put(log({
+      steps: 8200, waterGlasses: 6, ticks: { calories: true, course: true },
+    }));
+
+    render(<StrictMode><Today userId="u1" /></StrictMode>);
+
+    expect(await screen.findByTestId('confetti-shower')).toBeInTheDocument();
+    await waitFor(() => { expect(reward.playFanfare).toHaveBeenCalledTimes(1); });
+    // Both calls have settled by the time the stamp is readable, so the count
+    // above is final rather than merely early.
+    await waitFor(async () => {
+      expect(typeof (await db.dayLogs.get('l1'))?.bonusFiredAt).toBe('string');
+    });
+    expect(reward.playFanfare).toHaveBeenCalledTimes(1);
+    expect(await db.dayLogs.count()).toBe(1);
+    // One stamp, so one sync push: the second call must write nothing.
+    expect(await db.outbox.count()).toBe(1);
+  });
+
+  it('keeps the validated mark after a tick is taken back', async () => {
+    await db.dayLogs.put(log({
+      steps: 8200, waterGlasses: 6, ticks: { calories: true, course: true },
+    }));
+
+    render(<Today userId="u1" />);
+    expect(await screen.findByText('Journée validée.')).toBeInTheDocument();
+    await waitFor(async () => {
+      expect(typeof (await db.dayLogs.get('l1'))?.validatedAt).toBe('string');
+    });
+
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Course' }));
+    // Waited on the rendered box, not on the row: the write lands a tick
+    // before the live query re-renders, and what this case is about is what
+    // the screen shows afterwards.
+    await waitFor(() => {
+      expect(screen.getByRole('checkbox', { name: 'Course' })).not.toBeChecked();
+    });
+    expect((await db.dayLogs.get('l1'))?.ticks.course).toBe(false);
+
+    // The day no longer evaluates as complete, and the mark it earned stays,
+    // because validatedAt is never cleared.
+    expect(screen.getByText('Journée validée.')).toBeInTheDocument();
+    expect(typeof (await db.dayLogs.get('l1'))?.validatedAt).toBe('string');
+  });
+
+  it('names the day at the top of the screen', async () => {
+    render(<Today userId="u1" />);
+    // In the stored zone and without the year, and formatted back in UTC:
+    // dates are parsed at UTC noon, so a westward browser zone would read
+    // this back as the 5th.
+    expect(await screen.findByRole('heading', { name: 'mardi 6 octobre' })).toBeInTheDocument();
+  });
+
+  it('shows the step and water targets in French figures', async () => {
+    render(<Today userId="u1" />);
+    const hints = (await screen.findAllByText(/objectif/)).map((el) => el.textContent);
+    // Thin-space thousands, and the middle dot that separates name from hint.
+    expect(hints).toContain('\u00b7 objectif 8\u202f000');
+    expect(hints).toContain('\u00b7 objectif 6');
+  });
+
+  it('says it is loading rather than rendering an empty screen', async () => {
+    // No settings row for this user, so the view never resolves, and the
+    // screen has to say so rather than render blank.
+    //
+    // The copy is written as an expression rather than as JSX text because
+    // whether a \u escape in JSX TEXT is resolved is up to the transform -
+    // this project's resolves it, Babel does not and would ship the six
+    // characters of source to the user. An expression is a plain string
+    // literal and cannot differ. This case pins the copy, not that choice:
+    // under this toolchain both forms render the same ellipsis.
+    render(<Today userId="u-nobody" />);
+    expect(await screen.findByText('Un instant\u2026')).toBeInTheDocument();
+    expect(screen.queryByTestId('streak')).not.toBeInTheDocument();
+  });
+
+  it('ignores a steps entry that is not a count, rather than storing NaN', async () => {
+    render(<Today userId="u1" />);
+    const field = await screen.findByRole('textbox', { name: 'Pas' });
+
+    await userEvent.type(field, 'abc');
+    // Nothing written at all - not a row, not a push. A NaN here would make
+    // `NaN >= stepTarget` false for this day forever and render as "NaN".
+    expect(await db.dayLogs.count()).toBe(0);
+    expect(await db.outbox.count()).toBe(0);
+    expect(field).toHaveValue('');
+
+    // A pasted negative is a count no pedometer can report.
+    fireEvent.change(field, { target: { value: '-5' } });
+
+    // The control: the same field still takes a real count, so the guard is
+    // not simply a block. It also settles the rejected pastes above, because
+    // updateDayLog opens its transaction when it is called and IndexedDB runs
+    // overlapping readwrite transactions in the order they were opened - so
+    // anything they had queued has landed by the time this is readable.
+    fireEvent.change(field, { target: { value: '8200' } });
+    await waitFor(async () => {
+      expect((await db.dayLogs.toCollection().first())?.steps).toBe(8200);
+    });
+    // One accepted entry, so exactly one row and exactly one push. A stored
+    // -5 or NaN would show up here as a second outbox entry; asserting the
+    // count straight after the paste would not, because the write it rejects
+    // would not have landed yet either way.
+    expect(await db.dayLogs.count()).toBe(1);
+    expect(await db.outbox.count()).toBe(1);
+
+    // And clearing it stores null, not 0, which would read as a logged zero.
+    fireEvent.change(field, { target: { value: '' } });
+    await waitFor(async () => {
+      expect((await db.dayLogs.toCollection().first())?.steps).toBeNull();
+    });
   });
 });
 ```
@@ -2506,6 +2751,22 @@ Expected: FAIL — module not found.
 .today__items > * + * { border-top: 1px solid var(--line); }
 .today__amount { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 11px 2px; }
 .today__amount + .today__amount { border-top: 1px solid var(--line); }
+.today__amountrow { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
+.today__amountname { font-weight: 500; }
+.today__amounthint { color: var(--ink-soft); font-size: var(--step--1); }
+.today__steps {
+  width: 6ch;
+  text-align: right;
+  color: var(--ink);
+  background: var(--inset);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 6px 8px;
+  /* font-size AFTER font, which resets it: a text input under 16px makes iOS
+     Safari zoom the page on focus, and the layout jumps on every tap. */
+  font: inherit;
+  font-size: 16px;
+}
 .today__week { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
 .today__weeknum { font-family: var(--font-display); font-size: var(--step-2); }
 .today__joker { margin: 0; color: var(--ink-soft); }
@@ -2515,10 +2776,16 @@ Expected: FAIL — module not found.
 `src/features/today/Checklist.tsx`:
 
 ```tsx
-import type { ChecklistItem, ChecklistItemId } from '@/domain/checklist';
-import type { TickableItemId } from '@/domain/types';
+import type { ChecklistItem } from '@/domain/checklist';
+import type { ChecklistItemId, TickableItemId } from '@/domain/types';
 import { BowCheckbox } from '@/ui/BowCheckbox';
 
+/**
+ * Spec 4.2's five items, named for the screen. Not exported: a non-primitive
+ * export beside a component trips oxlint's only-export-components rule, which
+ * allowConstantExport only waives for primitives, and nothing outside this
+ * file needs the map.
+ */
 const LABELS: Record<ChecklistItemId, string> = {
   course: 'Course',
   calories: 'Calories respectées',
@@ -2527,7 +2794,16 @@ const LABELS: Record<ChecklistItemId, string> = {
   water: 'Eau',
 };
 
-const TICKABLE: ChecklistItemId[] = ['course', 'calories', 'no_dinner'];
+/**
+ * The three items a tap can satisfy. `steps` and `water` are derived from the
+ * amounts logged under the list, so a box for either would be a second,
+ * disagreeing source of truth.
+ */
+const TICKABLE: TickableItemId[] = ['course', 'calories', 'no_dinner'];
+
+function isTickable(id: ChecklistItemId): id is TickableItemId {
+  return (TICKABLE as ChecklistItemId[]).includes(id);
+}
 
 export function Checklist({
   items, onToggle,
@@ -2537,28 +2813,30 @@ export function Checklist({
 }) {
   return (
     <div className="today__items">
-      {items
-        .filter((item) => TICKABLE.includes(item.id))
-        .map((item) => (
+      {items.map((item) => {
+        // Narrowed through a const, so the closure below keeps the narrowing
+        // and no cast is needed to call onToggle.
+        const id = item.id;
+        if (!isTickable(id)) return null;
+        return (
           <BowCheckbox
-            key={item.id}
-            label={LABELS[item.id]}
+            key={id}
+            label={LABELS[id]}
             checked={item.satisfied}
-            onChange={(next) => onToggle(item.id as TickableItemId, next)}
+            onChange={(next) => onToggle(id, next)}
           />
-        ))}
+        );
+      })}
     </div>
   );
 }
-
-export { LABELS as CHECKLIST_LABELS };
 ```
 
 `src/features/today/StreakCard.tsx`:
 
 ```tsx
-import { plural } from '@/ui/format';
 import { Button } from '@/ui/Button';
+import { plural } from '@/ui/format';
 import { Pill } from '@/ui/Pill';
 
 export function StreakCard({
@@ -2582,7 +2860,10 @@ export function StreakCard({
       </div>
       {jokerAvailable && (
         <div>
-          <p className="today__joker">Un imprévu&nbsp;? Il te reste ton joker de la semaine.</p>
+          <p className="today__joker">
+            {/* No-break space before the question mark, French typography. */}
+            Un imprévu{'\u00a0'}? Il te reste ton joker de la semaine.
+          </p>
           <Button variant="quiet" onClick={onUseJoker}>Utiliser mon joker</Button>
         </div>
       )}
@@ -2594,46 +2875,116 @@ export function StreakCard({
 `src/features/today/Today.tsx`:
 
 ```tsx
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { updateDayLog, updateWeekPlan } from '@/db/repos';
 import { isoWeekOf } from '@/domain/calendar';
 import type { TickableItemId } from '@/domain/types';
+import { Checklist } from '@/features/today/Checklist';
+import { StreakCard } from '@/features/today/StreakCard';
+import { syncStamps } from '@/features/today/stamps';
+import { useToday } from '@/features/today/useToday';
 import { Card } from '@/ui/Card';
 import { Confetti } from '@/ui/Confetti';
 import { kcal, longDate } from '@/ui/format';
 import { playFanfare, playTick } from '@/ui/reward';
 import { Stepper } from '@/ui/Stepper';
-import { Checklist } from '@/features/today/Checklist';
-import { StreakCard } from '@/features/today/StreakCard';
-import { syncStamps } from '@/features/today/stamps';
-import { useToday } from '@/features/today/useToday';
 import '@/features/today/today.css';
+
+/** How long the shower runs before the screen goes quiet again. */
+const CELEBRATION_MS = 2600;
+
+/**
+ * kcal() is this project's thousands grouper (8000 becomes "8 000" with a
+ * narrow no-break space), and the French number rules apply to a step target
+ * as much as to a calorie count. Aliased rather than reimplemented, because a
+ * second grouper would be a second set of rules to keep in step.
+ */
+const grouped = kcal;
+
+type CountEntry =
+  | { kind: 'clear' }
+  | { kind: 'count'; value: number }
+  | { kind: 'reject' };
+
+/**
+ * What a keystroke in a count field means. inputMode is a keyboard hint, not a
+ * constraint: it does nothing on a desktop keyboard and nothing against a
+ * paste. Number('abc') is NaN, and a NaN in dayLogs.steps makes
+ * `NaN >= stepTarget` false for that day forever while rendering as "NaN", so
+ * anything that is not a count of zero or more is ignored rather than stored -
+ * the same guard Onboarding puts on its own number fields.
+ */
+function readCount(raw: string): CountEntry {
+  const text = raw.trim();
+  if (text === '') return { kind: 'clear' };
+  const value = Number(text);
+  if (!Number.isFinite(value) || value < 0) return { kind: 'reject' };
+  return { kind: 'count', value };
+}
 
 export function Today({ userId }: { userId: string }) {
   const view = useToday(userId);
   const [celebrating, setCelebrating] = useState(false);
+  const celebrationTimer = useRef(0);
 
-  // Stamp validation and fire the bonus whenever the view says the day is done.
+  // Cleared on unmount only: clearing it on every effect run would cut the
+  // shower short on the very re-render the stamp itself causes.
+  useEffect(() => () => { window.clearTimeout(celebrationTimer.current); }, []);
+
+  // Read out of the view so the effect below can depend on the values it
+  // actually uses rather than on the identity of a freshly built object.
+  const date = view?.date;
+  const validated = view?.validated;
+  const bonusFiredAt = view?.log.bonusFiredAt;
+  const sound = view?.settings.soundEnabled ?? false;
+
+  // Stamps validation and fires the one-time bonus whenever the view says the
+  // day is complete. The write belongs here and never in useToday's querier,
+  // where Dexie rejects any readwrite transaction.
   useEffect(() => {
-    if (!view) return;
-    let cancelled = false;
-    void syncStamps(userId, view).then((result) => {
-      if (cancelled || !result.fireBonus) return;
-      playFanfare(view.settings.soundEnabled);
+    if (date === undefined || validated === undefined) return;
+    // No cancellation flag on the result, deliberately. Firing twice is
+    // already impossible: stampDayLog decides inside one transaction from the
+    // stored row, so of any number of calls in flight exactly one reports
+    // fireBonus (Task 8). What a flag would add is a way to LOSE it. The
+    // report arrives after the write, bonusFiredAt is then stamped forever,
+    // and dropping the report because this effect was cleaned up mid-flight -
+    // an item unticked in the moment between the call and its answer - would
+    // mean the celebration never shows for that day again. The leak actually
+    // worth guarding is the timeout, which the unmount effect above clears.
+    void syncStamps(userId, { date, validated }).then((result) => {
+      if (!result.fireBonus) return;
+      playFanfare(sound);
       setCelebrating(true);
-      window.setTimeout(() => setCelebrating(false), 2600);
+      window.clearTimeout(celebrationTimer.current);
+      celebrationTimer.current = window.setTimeout(() => setCelebrating(false), CELEBRATION_MS);
     });
-    return () => { cancelled = true; };
-  }, [userId, view?.validated, view?.log.bonusFiredAt]);
+  }, [userId, date, validated, bonusFiredAt, sound]);
 
-  if (!view) return <p>Un instant\u2026</p>;
+  if (!view) return <p>{'Un instant\u2026'}</p>;
 
-  const sound = view.settings.soundEnabled;
-
-  async function toggle(id: TickableItemId, next: boolean) {
+  const toggle = async (id: TickableItemId, next: boolean) => {
     playTick(sound);
-    await updateDayLog(userId, view!.date, { ticks: { [id]: next } });
-  }
+    // Keyed off the date, never off view.log.id, which is the empty string on a
+    // day with no stored row yet.
+    await updateDayLog(userId, view.date, { ticks: { [id]: next } });
+  };
+
+  const spendJoker = async () => {
+    await updateDayLog(userId, view.date, { jokered: true });
+    // Rule 6: the week that holds the joker is the EXCUSED date's week, not
+    // whatever week today falls in. ISO weeks start on Monday, so on a Sunday
+    // the two differ - the Sunday belongs to the week that is closing.
+    await updateWeekPlan(userId, isoWeekOf(view.date), { jokerUsedOn: view.date });
+  };
+
+  const setSteps = (raw: string) => {
+    const entry = readCount(raw);
+    if (entry.kind === 'reject') return;
+    void updateDayLog(userId, view.date, {
+      steps: entry.kind === 'clear' ? null : entry.value,
+    });
+  };
 
   return (
     <div className="today">
@@ -2643,10 +2994,7 @@ export function Today({ userId }: { userId: string }) {
         streak={view.streak}
         daysLeft={view.daysLeft}
         jokerAvailable={view.jokerAvailable}
-        onUseJoker={async () => {
-          await updateDayLog(userId, view.date, { jokered: true });
-          await updateWeekPlan(userId, isoWeekOf(view.date), { jokerUsedOn: view.date });
-        }}
+        onUseJoker={spendJoker}
       />
 
       <Card laced>
@@ -2654,26 +3002,29 @@ export function Today({ userId }: { userId: string }) {
         <Checklist items={view.items} onToggle={toggle} />
 
         <div className="today__amount">
-          <span>Pas {'\u00b7'} objectif {view.settings.stepTarget}</span>
+          <span className="today__amountrow">
+            <label className="today__amountname" htmlFor="today-steps">Pas</label>
+            <span className="today__amounthint">
+              {`\u00b7 objectif ${grouped(view.settings.stepTarget)}`}
+            </span>
+          </span>
           <input
+            id="today-steps"
+            className="today__steps"
             aria-label="Pas"
             inputMode="numeric"
             value={view.log.steps ?? ''}
-            onChange={(event) => {
-              const raw = event.target.value.trim();
-              void updateDayLog(userId, view.date, { steps: raw === '' ? null : Number(raw) });
-            }}
-            style={{
-              // fontSize after font, which resets it: under 16px iOS zooms on focus.
-              width: '6ch', font: 'inherit', fontSize: 16, textAlign: 'right',
-              color: 'var(--ink)', background: 'var(--inset)',
-              border: '1px solid var(--line)', borderRadius: 10, padding: '6px 8px',
-            }}
+            onChange={(event) => setSteps(event.target.value)}
           />
         </div>
 
         <div className="today__amount">
-          <span>Eau {'\u00b7'} objectif {view.settings.waterTarget}</span>
+          <span className="today__amountrow">
+            <span className="today__amountname">Eau</span>
+            <span className="today__amounthint">
+              {`\u00b7 objectif ${grouped(view.settings.waterTarget)}`}
+            </span>
+          </span>
           <Stepper
             label="Eau"
             value={view.log.waterGlasses ?? 0}
@@ -2687,7 +3038,13 @@ export function Today({ userId }: { userId: string }) {
           />
         </div>
 
-        {view.validated && <p className="today__done">Journée validée.</p>}
+        {/* The stamp, not the live evaluation: spec 4.3 makes validatedAt a
+            fact about what happened, so a target raised later - or a tick
+            taken back - cannot un-validate a day that earned it. The live
+            `validated` is here too, for the instant before the stamp lands. */}
+        {(view.log.validatedAt !== null || view.validated) && (
+          <p className="today__done">Journée validée.</p>
+        )}
       </Card>
 
       <Card>
@@ -2704,7 +3061,7 @@ export function Today({ userId }: { userId: string }) {
 - [ ] **Step 4: Run the tests**
 
 Run: `npm test -- Today`
-Expected: PASS, 4 tests from the block above **plus the four this task owes**, below.
+Expected: PASS, 13 tests.
 
 **Four tests is not enough for the screen the whole app exists to show, and one of the gaps is a requirement this task's own prose claims to own.**
 
