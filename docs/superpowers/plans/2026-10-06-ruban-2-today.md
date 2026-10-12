@@ -12,6 +12,8 @@
 
 **Depends on:** Plan 1 complete (`docs/superpowers/plans/2026-10-06-ruban-1-foundation.md`).
 
+**Dispatch note, for whoever runs two agents at once.** Mutation testing edits a source file in place, so two concurrent agents can collide in two ways that both produce false signals. First, the session scratchpad is shared: two agents each writing `mutate.py` overwrite each other, which happened during Tasks 7 and 9. Second, and worse, **a full `npm test` run by either agent can momentarily observe the other's live mutation** and report a failure that belongs to nobody. So: tell each agent to name its scratchpad files after its task, to run only the test files in its own scope while probing, and to take its final full-suite number with `git status --porcelain` showing nothing but its own files. Give concurrent agents non-overlapping files, and say in the dispatch which files the other one holds.
+
 ## Required before the first screen reads the database
 
 Three items carried out of Plan 1's final review. All are latent there — Plan 1 has no
@@ -2125,6 +2127,8 @@ git commit -m "feat: stamp day validation and fire the bonus once"
 
 Synthesised through the Web Audio API rather than shipped as a file: nothing to download, nothing to cache, and no CSP question. Both functions return immediately when `enabled` is false, so the default-off sound setting costs nothing.
 
+**My `Confetti` code was untestable as written, and the implementer had to change it.** Both branches rendered an anonymous `motion.div`, so no assertion could tell the shower from the reduced-motion pulse — the dedicated test file would have been built and still could not have discriminated. Each branch now carries a `data-testid` (`confetti-shower`, `confetti-pulse`), the pattern `Bow` already uses. The block below is the shipped file. Writing a brief that demands a discriminating test while specifying markup that cannot be distinguished is a defect in the brief, not a detail for the implementer to solve quietly.
+
 **`Confetti`'s reduced-motion branch needs its own test file, and I originally listed no `Confetti` test at all.** This is Task 3's defect repeating: framer-motion reads `prefers-reduced-motion` once and caches it behind a module-level guard, so `matchMedia` must be stubbed *before the module is first imported*. Vitest gives each test file its own module registry, which makes a dedicated file the only way to exercise the branch — in Task 3 the first attempt at an in-file test passed against a deliberately broken branch, and the implementer deleted it rather than ship it. So:
 
 - `src/ui/Confetti.reducedMotion.test.tsx` stubs `matchMedia` to report `prefers-reduced-motion: reduce` at the very top, before any import of `Confetti`, and asserts the single soft pulse renders and the shower does not.
@@ -2255,6 +2259,7 @@ export function Confetti({ active }: { active: boolean }) {
   if (reduced) {
     return (
       <motion.div
+        data-testid="confetti-pulse"
         style={{ position: 'fixed', inset: 0, pointerEvents: 'none', background: 'var(--rose)' }}
         initial={{ opacity: 0 }}
         animate={{ opacity: [0, 0.22, 0] }}
@@ -2264,7 +2269,10 @@ export function Confetti({ active }: { active: boolean }) {
   }
 
   return (
-    <div style={{ position: 'fixed', inset: 0, pointerEvents: 'none', overflow: 'hidden' }}>
+    <div
+      data-testid="confetti-shower"
+      style={{ position: 'fixed', inset: 0, pointerEvents: 'none', overflow: 'hidden' }}
+    >
       {Array.from({ length: PIECES }, (_, i) => (
         <motion.div
           key={i}
