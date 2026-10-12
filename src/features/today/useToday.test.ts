@@ -1,9 +1,10 @@
 import 'fake-indexeddb/auto';
-import { renderHook, waitFor } from '@testing-library/react';
+import { act, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { db } from '@/db/schema';
 import {
-  blankDayLog, buildTodayView, useToday, type TodayInputs,
+  blankDayLog, buildTodayView, msUntilNextMidnight, useCurrentDate, useToday,
+  type TodayInputs,
 } from '@/features/today/useToday';
 import type {
   CalorieEntry, DayLog, Run, Settings, WeekPlan,
@@ -209,6 +210,112 @@ describe('buildTodayView', () => {
   });
 });
 
+describe('msUntilNextMidnight', () => {
+  it('counts to midnight in the given zone, not in the device zone', () => {
+    // The suite runs in TZ=Europe/Paris, where this instant is 23:50 on the
+    // 6th - ten minutes short of midnight. In Auckland it is already 10:50 on
+    // the 7th, so the next midnight is thirteen hours and ten minutes off. A
+    // computation that read the device zone would return the ten minutes.
+    const now = new Date('2026-10-06T21:50:00Z');
+    expect(msUntilNextMidnight('Europe/Paris', now)).toBe(10 * 60_000);
+    expect(msUntilNextMidnight('Pacific/Auckland', now)).toBe((13 * 60 + 10) * 60_000);
+  });
+
+  it('uses the offset at that midnight, not the offset now', () => {
+    // 02:30 Paris on 25 October 2026, an hour before the clocks go back: the
+    // zone is at +02:00 right now and will be at +01:00 at the midnight being
+    // scheduled. Reading only the current offset lands an hour early, at
+    // 23:00 local on the 25th.
+    const now = new Date('2026-10-25T00:30:00Z');
+    expect(msUntilNextMidnight('Europe/Paris', now)).toBe(22.5 * 3_600_000);
+  });
+
+  it('never schedules a timer for the same instant or the past', () => {
+    // A tenth of a second before midnight. The parts Intl hands back carry no
+    // milliseconds, so the raw answer here is 100ms or less, and a timer that
+    // short - or one at zero - re-fires faster than the date can change.
+    // Firing a touch late costs nothing: the date is read when it fires.
+    const now = new Date('2026-10-06T21:59:59.900Z');
+    expect(msUntilNextMidnight('Europe/Paris', now)).toBe(1000);
+  });
+});
+
+describe('useCurrentDate', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('has no date until a zone is known', () => {
+    // The zone comes from a stored settings row, so it is undefined for the
+    // first render or two. A date guessed in the device zone in the meantime
+    // would be the wrong DAY for half the planet, and the view would be built
+    // on it.
+    const { result } = renderHook(() => useCurrentDate(undefined));
+    expect(result.current).toBeUndefined();
+  });
+
+  it('moves to the new date when the scheduled midnight arrives', async () => {
+    // setTimeout faked as well here, because the wait is ten minutes long.
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    // 23:50 in Paris on Tuesday the 6th: spec 10's "ticked at 23h in bed".
+    vi.setSystemTime(new Date('2026-10-06T21:50:00Z'));
+
+    const { result } = renderHook(() => useCurrentDate('Europe/Paris'));
+    expect(result.current).toBe('2026-10-06');
+
+    // Nine minutes: still the 6th, so the timer is not merely a short poll
+    // that would pass whatever it was scheduled for.
+    await act(async () => { await vi.advanceTimersByTimeAsync(9 * 60_000); });
+    expect(result.current).toBe('2026-10-06');
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(2 * 60_000); });
+    expect(result.current).toBe('2026-10-07');
+
+    // And the next midnight is scheduled too, rather than one day being all
+    // the timer was good for.
+    await act(async () => { await vi.advanceTimersByTimeAsync(24 * 3_600_000); });
+    expect(result.current).toBe('2026-10-08');
+  });
+
+  it('moves to the new date when the tab is resumed after midnight', () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-06T21:50:00Z'));
+
+    const { result } = renderHook(() => useCurrentDate('Europe/Paris'));
+    expect(result.current).toBe('2026-10-06');
+
+    // A home-screen PWA on iOS is resumed from the background, not reloaded,
+    // and a timer in a frozen tab does not fire on time - so without this the
+    // stale date survives for days.
+    vi.setSystemTime(new Date('2026-10-06T22:10:00Z'));
+    act(() => { document.dispatchEvent(new Event('visibilitychange')); });
+    expect(result.current).toBe('2026-10-07');
+  });
+
+  it('takes its listener back off the document when unmounted', () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-06T21:50:00Z'));
+    // Asserted through the listener itself rather than through a later
+    // dispatch: React 19 no longer warns about a setState on an unmounted
+    // hook, so a dispatch after unmount is observably nothing either way -
+    // a case that could not fail. A listener left behind outlives every
+    // screen the user opens.
+    const added = vi.spyOn(document, 'addEventListener');
+    const removed = vi.spyOn(document, 'removeEventListener');
+
+    const { unmount } = renderHook(() => useCurrentDate('Europe/Paris'));
+    const registered = added.mock.calls
+      .filter(([type]) => type === 'visibilitychange')
+      .map(([, handler]) => handler);
+    expect(registered).toHaveLength(1);
+
+    unmount();
+    expect(removed).toHaveBeenCalledWith('visibilitychange', registered[0]);
+    added.mockRestore();
+    removed.mockRestore();
+  });
+});
+
 describe('blankDayLog', () => {
   it('builds an unlogged day', () => {
     // The whole shape, not a sample of it: a surviving `jokered` would keep the
@@ -372,6 +479,32 @@ describe('useToday', () => {
     // less the two in-week entries and not the 2026-W40 one.
     expect(view?.weeklyBudget).toBe(6 * 1500 + 900);
     expect(view?.weeklyRemaining).toBe(6 * 1500 + 900 - 2850);
+  });
+
+  it('re-reads the day when the clock crosses midnight under a mounted screen', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    // 23:50 in Paris on Tuesday the 6th, with the screen staying mounted
+    // across midnight - the primary use case, and the one the date computed
+    // inside the querier could never notice: a querier re-runs on an observed
+    // TABLE change, and midnight is not one.
+    vi.setSystemTime(new Date('2026-10-06T21:50:00Z'));
+    await db.settings.put(settings);
+
+    const { result } = renderHook(() => useToday('u1'));
+    await waitFor(() => expect(result.current).toBeDefined());
+    expect(result.current?.date).toBe('2026-10-06');
+
+    vi.setSystemTime(new Date('2026-10-06T22:10:00Z'));
+    document.dispatchEvent(new Event('visibilitychange'));
+
+    // The whole view moves with it, not just the date field: Wednesday is a
+    // no-dinner evening under the defaults and Tuesday is a run day, so the
+    // items are the proof that the querier re-ran rather than the state alone
+    // having changed.
+    await waitFor(() => expect(result.current?.date).toBe('2026-10-07'));
+    expect(result.current?.items.map((i) => i.id))
+      .toEqual(['calories', 'no_dinner', 'steps', 'water']);
+    expect(result.current?.log).toEqual(blankDayLog('u1', '2026-10-07'));
   });
 
   it('resolves to undefined while no settings row exists', async () => {

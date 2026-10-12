@@ -1,4 +1,5 @@
 import { useLiveQuery } from 'dexie-react-hooks';
+import { useEffect, useState } from 'react';
 import {
   getDayLog, getSettings, getWeekPlan, listCalorieEntries,
   listDayLogs, listRuns,
@@ -7,7 +8,9 @@ import {
   dayCalorieTotal, weekCalorieTotal,
   weeklyBudget as computeWeeklyBudget, weeklyRemaining,
 } from '@/domain/budget';
-import { datesOfIsoWeek, isoWeekOf, isValidTimeZone, todayIn } from '@/domain/calendar';
+import {
+  addDays, datesOfIsoWeek, isoWeekOf, isValidTimeZone, todayIn,
+} from '@/domain/calendar';
 import {
   effectiveWeekPlan, evaluateChecklist, isDayValidated,
   type ChecklistItem, type ChecklistPlan,
@@ -127,18 +130,123 @@ export function blankDayLog(userId: string, date: IsoDate): DayLog {
   };
 }
 
+/**
+ * The zone's offset from UTC, in milliseconds, AT the given instant - so a
+ * DST change moves it. Read by rendering the instant in the zone and reading
+ * the wall-clock parts back as if they were UTC.
+ */
+function zoneOffsetMs(tz: string, at: Date): number {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: tz, hourCycle: 'h23',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+  }).formatToParts(at);
+  const part = (type: string): number => {
+    const value = parts.find((p) => p.type === type)?.value;
+    if (value === undefined) throw new Error(`Intl omitted the "${type}" part for ${tz}`);
+    return Number(value);
+  };
+  const wallAsUtc = Date.UTC(
+    part('year'), part('month') - 1, part('day'),
+    part('hour'), part('minute'), part('second'),
+  );
+  // The instant truncated to the second, because the parts carry no millis.
+  return wallAsUtc - Math.floor(at.getTime() / 1000) * 1000;
+}
+
+/**
+ * Milliseconds from `now` until 00:00 of the next day IN `tz` - the stored
+ * zone, never the device's, which is a different date for half the planet.
+ *
+ * Local midnight is an instant, and its offset from UTC is the zone's offset
+ * at that instant rather than at `now`: on the night the clocks go back, the
+ * two differ by an hour. So the first guess uses the current offset and the
+ * second re-reads the offset at that guess, which lands on the real midnight
+ * for every zone a device can be in.
+ *
+ * Never returns zero or less. A timer at zero would spin, and a guess that
+ * lands a touch early is harmless: the caller re-reads the date, finds it
+ * unchanged and schedules again for what is left.
+ */
+export function msUntilNextMidnight(tz: string, now: Date = new Date()): number {
+  const tomorrow = addDays(todayIn(tz, now), 1);
+  const wallMidnight = Date.parse(`${tomorrow}T00:00:00.000Z`);
+  const guess = wallMidnight - zoneOffsetMs(tz, new Date(wallMidnight - zoneOffsetMs(tz, now)));
+  return Math.max(guess - now.getTime(), 1000);
+}
+
+/**
+ * Today's date in `tz`, kept current while the screen stays mounted, and
+ * undefined until a zone is known.
+ *
+ * This cannot live inside the useLiveQuery querier below. A querier re-runs
+ * when an observed TABLE changes and at no other time, so a date computed in
+ * there is frozen at whatever it was when the screen opened: at 23h in bed -
+ * spec 10's own example - the checklist keeps stamping yesterday after
+ * midnight, which silently re-validates a day already stamped, leaves the new
+ * day empty and breaks the streak, with only the heading as a clue.
+ *
+ * Two refreshes, because neither covers the other. The timer catches midnight
+ * on a screen that stays awake. visibilitychange catches the iOS home-screen
+ * PWA, which is RESUMED from the background rather than reloaded - a timer in
+ * a frozen tab does not fire on time, and without this the stale date would
+ * survive for days.
+ */
+export function useCurrentDate(timezone: string | undefined): IsoDate | undefined {
+  const [date, setDate] = useState<IsoDate | undefined>(undefined);
+
+  useEffect(() => {
+    if (timezone === undefined) return;
+    let timer = 0;
+    const tick = () => {
+      // setState with the same string is a no-op in React, so the ordinary
+      // case - a resume on the same day - costs no re-render and no re-query.
+      setDate(todayIn(timezone));
+      timer = window.setTimeout(tick, msUntilNextMidnight(timezone));
+    };
+    const onVisible = () => {
+      if (document.visibilityState === 'hidden') return;
+      // Rescheduled from the real clock: the pending timer was measured
+      // against a midnight that may be hours past.
+      window.clearTimeout(timer);
+      tick();
+    };
+    tick();
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      window.clearTimeout(timer);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [timezone]);
+
+  return date;
+}
+
 export function useToday(userId: string): TodayView | undefined {
+  // The zone comes from its own live read, because the date has to be known
+  // before the querier below runs rather than computed inside it.
+  const settingsRow = useLiveQuery(() => getSettings(userId), [userId]);
+  // A stored zone can be one this runtime rejects (synced from a device with
+  // a different ICU, or a zone since dropped), and todayIn would then throw a
+  // RangeError out of the hook below. There is no ErrorBoundary above this
+  // screen, so that is a white screen on the main view. Fall back the way
+  // onboarding does for the detected zone.
+  const timezone = settingsRow === undefined
+    ? undefined
+    : (isValidTimeZone(settingsRow.timezone) ? settingsRow.timezone : 'UTC');
+  const date = useCurrentDate(timezone);
+
   return useLiveQuery(async () => {
+    // Undefined only until the zone has been read; the view would otherwise
+    // flash a date computed in the wrong zone, which near midnight is the
+    // wrong DAY, and the stamping effect would stamp it.
+    if (date === undefined) return undefined;
+    // Re-read rather than closed over: the view's settings and its rows then
+    // come from one consistent moment, and the querier observes the settings
+    // table, so an edited target re-runs it.
     const settings = await getSettings(userId);
     if (!settings) return undefined;
 
-    // A stored zone can be one this runtime rejects (synced from a device with
-    // a different ICU, or a zone since dropped), and todayIn would then throw a
-    // RangeError inside this querier. There is no ErrorBoundary above it, so
-    // that is a white screen on the main view. Fall back the way onboarding
-    // does for the detected zone.
-    const timezone = isValidTimeZone(settings.timezone) ? settings.timezone : 'UTC';
-    const date = todayIn(timezone);
     const week = isoWeekOf(date);
     const weekDates = new Set(datesOfIsoWeek(week));
 
@@ -165,5 +273,8 @@ export function useToday(userId: string): TodayView | undefined {
       // test can tell the filtered list from the unfiltered one.
       calorieEntriesWeek: calorieEntries.filter((e) => weekDates.has(e.date)),
     });
-  }, [userId]);
+    // `date` is a dep, not just a closure read: a querier re-runs on an
+    // observed table change and on a dep change, and midnight is neither a
+    // table change nor a render of its own.
+  }, [userId, date]);
 }

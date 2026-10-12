@@ -5,7 +5,7 @@ import {
   getDayLog, getOrCreateDayLog, getOrCreateWeekPlan, getSettings, getWeekPlan,
   listCalorieEntries, listCycles, listDayLogs, listRuns, listWeights,
   saveCalorieEntry, saveCycle, saveRun, saveSettings, saveWeight, softDelete,
-  stampDayLog, updateDayLog, updateWeekPlan,
+  spendJoker, stampDayLog, updateDayLog, updateWeekPlan,
 } from '@/db/repos';
 import { DEFAULT_NO_DINNER_DAYS, DEFAULT_RUN_DAYS, type Settings } from '@/domain/types';
 
@@ -121,6 +121,81 @@ describe('updateDayLog', () => {
     ]);
     const log = await getOrCreateDayLog('u1', '2026-10-10');
     expect(log.ticks).toEqual({ course: true, calories: true });
+  });
+
+  it('applies the function form to the stored row', async () => {
+    await updateDayLog('u1', '2026-10-06', { waterGlasses: 4 });
+    const after = await updateDayLog('u1', '2026-10-06', (row) => ({
+      waterGlasses: (row.waterGlasses ?? 0) + 1,
+    }));
+    expect(after.waterGlasses).toBe(5);
+  });
+
+  it('hands the function form a blank row on a day with none stored', async () => {
+    const after = await updateDayLog('u1', '2026-10-12', (row) => ({
+      waterGlasses: (row.waterGlasses ?? 0) + 1,
+      ticks: { course: row.ticks.course !== true },
+    }));
+    expect(after.waterGlasses).toBe(1);
+    expect(after.ticks).toEqual({ course: true });
+    expect(await db.dayLogs.count()).toBe(1);
+  });
+
+  it('loses no increment when three of them are in flight together', async () => {
+    // Three taps on the water stepper with nothing awaited between them. The
+    // caller cannot know the stored count - the one it rendered is a
+    // useLiveQuery snapshot, and no new one can arrive until the first write
+    // has landed - so all three would read 0 and all three would store 1.
+    // The function form is applied inside the transaction, where the row is
+    // the stored one.
+    const bump = () => updateDayLog('u1', '2026-10-11', (row) => ({
+      waterGlasses: (row.waterGlasses ?? 0) + 1,
+    }));
+    await Promise.all([bump(), bump(), bump()]);
+    expect((await getOrCreateDayLog('u1', '2026-10-11')).waterGlasses).toBe(3);
+  });
+
+  it('flips a tick back when a tick and an untick are in flight together', async () => {
+    const flip = () => updateDayLog('u1', '2026-10-13', (row) => ({
+      ticks: { calories: row.ticks.calories !== true },
+    }));
+    await Promise.all([flip(), flip()]);
+    // On, then off: a mistaken tick taken straight back must not survive.
+    expect((await getOrCreateDayLog('u1', '2026-10-13')).ticks.calories).toBe(false);
+  });
+});
+
+describe('spendJoker', () => {
+  it('marks the day and the week in one go', async () => {
+    const { log, plan } = await spendJoker('u1', '2026-10-06');
+    expect(log.jokered).toBe(true);
+    expect(plan.jokerUsedOn).toBe('2026-10-06');
+    expect((await getDayLog('u1', '2026-10-06'))?.jokered).toBe(true);
+    expect((await getWeekPlan('u1', '2026-W41'))?.jokerUsedOn).toBe('2026-10-06');
+    // One push per row, and no more: the day log is created and written once.
+    expect(await db.outbox.count()).toBe(2);
+  });
+
+  it('records the spend on the week of the day being excused', async () => {
+    // Sunday 2026-10-11 is the LAST day of 2026-W41; the next day opens W42.
+    // ISO weeks start on Monday, so a Sunday is the one case that tells the
+    // excused date's week apart from any week read off the following day.
+    await spendJoker('u1', '2026-10-11');
+    expect((await getWeekPlan('u1', '2026-W41'))?.jokerUsedOn).toBe('2026-10-11');
+    expect(await getWeekPlan('u1', '2026-W42')).toBeUndefined();
+  });
+
+  it('writes neither row when the second write cannot be made', async () => {
+    // One invariant - spec 4.4's one joker per ISO week - over two rows, so
+    // the two writes share one transaction and a failure between them rolls
+    // the first back. Done as two calls, the day would come out jokered with
+    // no spend recorded: the joker burnt, and the day it was meant to excuse
+    // still breaking the streak. The trigger here is a date that has no ISO
+    // week, which throws after the day log has been written.
+    await expect(spendJoker('u1', '2026-02-31')).rejects.toThrow();
+    expect(await db.dayLogs.count()).toBe(0);
+    expect(await db.weekPlans.count()).toBe(0);
+    expect(await db.outbox.count()).toBe(0);
   });
 });
 

@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { updateDayLog, updateWeekPlan } from '@/db/repos';
-import { isoWeekOf } from '@/domain/calendar';
-import type { TickableItemId } from '@/domain/types';
+import { spendJoker, updateDayLog } from '@/db/repos';
+import type { IsoDate, TickableItemId } from '@/domain/types';
 import { Checklist } from '@/features/today/Checklist';
 import { StreakCard } from '@/features/today/StreakCard';
 import { syncStamps } from '@/features/today/stamps';
@@ -15,6 +14,10 @@ import '@/features/today/today.css';
 
 /** How long the shower runs before the screen goes quiet again. */
 const CELEBRATION_MS = 2600;
+
+/** The glass count the stepper offers, and the range a write is clamped to. */
+const WATER_MIN = 0;
+const WATER_MAX = 20;
 
 /**
  * kcal() is this project's thousands grouper (8000 becomes "8 000" with a
@@ -49,6 +52,22 @@ export function Today({ userId }: { userId: string }) {
   const view = useToday(userId);
   const [celebrating, setCelebrating] = useState(false);
   const celebrationTimer = useRef(0);
+
+  /**
+   * What is being typed into the step field, while it is being typed, and null
+   * the rest of the time - when the field simply shows the stored count.
+   *
+   * The field cannot be driven off the live query. Its value was then reset on
+   * every re-render to the PRE-write count, which is one IndexedDB round-trip
+   * behind the keystrokes, so any two keys struck inside one round-trip
+   * collapsed: typing "8200" stored 0 and left "0" in the field, with nothing
+   * to say so. Held as a draft rather than re-seeded from an effect, so the
+   * stored count shows on the very first render and never lands mid-word.
+   *
+   * Stamped with the date it belongs to, because midnight moves the day under
+   * a mounted screen and a draft is about one day's count.
+   */
+  const [stepsDraft, setStepsDraft] = useState<{ date: IsoDate; text: string } | null>(null);
 
   // Cleared on unmount only: clearing it on every effect run would cut the
   // shower short on the very re-render the stamp itself causes.
@@ -89,21 +108,37 @@ export function Today({ userId }: { userId: string }) {
   const toggle = async (id: TickableItemId, next: boolean) => {
     playTick(sound);
     // Keyed off the date, never off view.log.id, which is the empty string on a
-    // day with no stored row yet.
-    await updateDayLog(userId, view.date, { ticks: { [id]: next } });
+    // day with no stored row yet. And flipped from the STORED tick rather than
+    // written as `next`, which the browser derived from the rendered box: two
+    // fast taps both read the same rendered state, so both wrote `true` and
+    // the untick was lost. `next` is still the seed for the first tap, when no
+    // tick is stored and the box may be showing something else as satisfied -
+    // a logged run standing in for an unticked `course`.
+    await updateDayLog(userId, view.date, (row) => ({
+      ticks: { [id]: row.ticks[id] === undefined ? next : !row.ticks[id] },
+    }));
   };
 
-  const spendJoker = async () => {
-    await updateDayLog(userId, view.date, { jokered: true });
-    // Rule 6: the week that holds the joker is the EXCUSED date's week, not
-    // whatever week today falls in. ISO weeks start on Monday, so on a Sunday
-    // the two differ - the Sunday belongs to the week that is closing.
-    await updateWeekPlan(userId, isoWeekOf(view.date), { jokerUsedOn: view.date });
+  const useJoker = async () => {
+    // One repo call, so the day log and the week plan move in one transaction:
+    // the invariant is one joker per ISO week, and it lives across both rows.
+    await spendJoker(userId, view.date);
   };
+
+  // The draft while she is typing into the field, the stored count otherwise.
+  const stepsText = stepsDraft !== null && stepsDraft.date === view.date
+    ? stepsDraft.text
+    : String(view.log.steps ?? '');
 
   const setSteps = (raw: string) => {
     const entry = readCount(raw);
+    // Rejected, so neither stored nor shown: the field keeps what it had,
+    // which is what makes a typed "abc" leave it empty rather than showing
+    // text that would read back as NaN.
     if (entry.kind === 'reject') return;
+    setStepsDraft({ date: view.date, text: raw });
+    // An absolute value, not a value computed from the stored one, so a plain
+    // patch is right here: the draft above is what the digits accumulate in.
     void updateDayLog(userId, view.date, {
       steps: entry.kind === 'clear' ? null : entry.value,
     });
@@ -117,7 +152,7 @@ export function Today({ userId }: { userId: string }) {
         streak={view.streak}
         daysLeft={view.daysLeft}
         jokerAvailable={view.jokerAvailable}
-        onUseJoker={spendJoker}
+        onUseJoker={useJoker}
       />
 
       <Card laced>
@@ -136,8 +171,13 @@ export function Today({ userId }: { userId: string }) {
             className="today__steps"
             aria-label="Pas"
             inputMode="numeric"
-            value={view.log.steps ?? ''}
+            value={stepsText}
             onChange={(event) => setSteps(event.target.value)}
+            // Back to the stored count once she is done with the field: every
+            // keystroke has already been written, so this only re-syncs the
+            // text - it is not what commits the count, which a blur a
+            // backgrounded PWA never sends would then lose.
+            onBlur={() => setStepsDraft(null)}
           />
         </div>
 
@@ -150,13 +190,25 @@ export function Today({ userId }: { userId: string }) {
           </span>
           <Stepper
             label="Eau"
-            value={view.log.waterGlasses ?? 0}
-            min={0}
-            max={20}
+            value={view.log.waterGlasses ?? WATER_MIN}
+            min={WATER_MIN}
+            max={WATER_MAX}
             step={1}
             onChange={(next) => {
               playTick(sound);
-              void updateDayLog(userId, view.date, { waterGlasses: next });
+              // The tap as a MOVE applied to the stored count, not as the
+              // absolute `next` the stepper computed from the rendered one.
+              // Three fast taps all render the same count, so three absolute
+              // writes stored 1 and lost two glasses; three moves store 3.
+              // Clamped in here as well, because the stepper's own min/max
+              // only guard the value it was rendered with.
+              const move = next - (view.log.waterGlasses ?? WATER_MIN);
+              void updateDayLog(userId, view.date, (row) => ({
+                waterGlasses: Math.min(
+                  WATER_MAX,
+                  Math.max(WATER_MIN, (row.waterGlasses ?? WATER_MIN) + move),
+                ),
+              }));
             }}
           />
         </div>

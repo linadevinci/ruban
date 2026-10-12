@@ -289,4 +289,132 @@ describe('Today', () => {
       expect((await db.dayLogs.toCollection().first())?.steps).toBeNull();
     });
   });
+
+  it('keeps every digit of a step count typed key by key', async () => {
+    render(<Today userId="u1" />);
+    const field = await screen.findByRole('textbox', { name: 'Pas' });
+
+    // Key by key and with no delay, which is how a number is actually typed
+    // and the one thing the suite never did: every case above hands the field
+    // a whole value in one change event. A field whose value comes from the
+    // live query is reset to the PRE-write value on the re-render each
+    // keystroke causes, so any two keys inside one IndexedDB round-trip
+    // collapse - this typed 0 into the field and stored 0.
+    await userEvent.type(field, '8200', { delay: 0 });
+
+    await waitFor(async () => {
+      expect((await db.dayLogs.toCollection().first())?.steps).toBe(8200);
+    });
+    expect(field).toHaveValue('8200');
+    // 8200 clears the 8000 target, so the day can go on to validate. A
+    // collapsed 0 or 82 never would, and nothing on the screen would say why.
+    expect(screen.getByRole('checkbox', { name: 'Calories respectées' })).toBeInTheDocument();
+  });
+
+  it('shows the step count already stored for the day', async () => {
+    // The draft the field is driven by has to be seeded from the stored row,
+    // or a count logged yesterday evening - or on her laptop - would read as
+    // an empty field this morning, and the first keystroke would replace it.
+    await db.dayLogs.put(log({ steps: 8200 }));
+    render(<Today userId="u1" />);
+    expect(await screen.findByRole('textbox', { name: 'Pas' })).toHaveValue('8200');
+  });
+
+  it('honours the first tap on a box that something else is satisfying', async () => {
+    // A logged run satisfies `course` on its own, with no tick stored, so the
+    // box shows checked while the stored tick is unset. The first tap means
+    // what the browser says it means - take it back - and only a LATER tap
+    // has an earlier tap's result to flip instead.
+    await db.runs.put({
+      id: 'r1', userId: 'u1', date: TUESDAY, distanceKm: 5, durationS: 1500,
+      note: null, updatedAt: '2026-10-06T09:00:00.000Z', deletedAt: null,
+    });
+
+    render(<Today userId="u1" />);
+    const box = await screen.findByRole('checkbox', { name: 'Course' });
+    expect(box).toBeChecked();
+
+    await userEvent.click(box);
+    await waitFor(async () => {
+      expect((await db.dayLogs.toCollection().first())?.ticks.course).toBe(false);
+    });
+  });
+
+  it('counts every tap on the water stepper, however fast they come', async () => {
+    render(<Today userId="u1" />);
+    const plus = await screen.findByRole('button', { name: 'Augmenter Eau' });
+
+    // Three taps with no await between them: all three read the same rendered
+    // count, because the live query cannot deliver a new one until the first
+    // write has landed. Writing the absolute value the stepper computed from
+    // that count stored 1 and lost two glasses.
+    fireEvent.click(plus);
+    fireEvent.click(plus);
+    fireEvent.click(plus);
+
+    await waitFor(async () => {
+      expect((await db.dayLogs.toCollection().first())?.waterGlasses).toBe(3);
+    });
+    expect(await screen.findByText('3')).toBeInTheDocument();
+  });
+
+  it('lets a mistaken tick be taken straight back', async () => {
+    render(<Today userId="u1" />);
+    const box = await screen.findByRole('checkbox', { name: 'Calories respectées' });
+
+    // Tick, then untick before the first write has been delivered back - a
+    // tap on the wrong line and an immediate correction. Both taps read the
+    // same rendered box, so both wrote `true` and the untick was lost: the
+    // day then validated on an item she had explicitly taken back.
+    fireEvent.click(box);
+    fireEvent.click(box);
+
+    await waitFor(async () => {
+      expect((await db.dayLogs.toCollection().first())?.ticks.calories).toBe(false);
+    });
+    await waitFor(() => {
+      expect(screen.getByRole('checkbox', { name: 'Calories respectées' })).not.toBeChecked();
+    });
+  });
+
+  it('does not carry a half-typed step count over into the new day', async () => {
+    vi.setSystemTime(new Date('2026-10-06T21:50:00Z'));
+    render(<Today userId="u1" />);
+    const field = await screen.findByRole('textbox', { name: 'Pas' });
+    await userEvent.type(field, '82', { delay: 0 });
+    expect(field).toHaveValue('82');
+
+    // Midnight, with the field never blurred. The draft belongs to the day it
+    // was typed on: the 7th has no count yet, and showing yesterday's "82"
+    // over an empty row would invite her to add two digits to a number that
+    // is not there.
+    vi.setSystemTime(new Date('2026-10-06T22:10:00Z'));
+    document.dispatchEvent(new Event('visibilitychange'));
+
+    expect(await screen.findByRole('heading', { name: 'mercredi 7 octobre' })).toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: 'Pas' })).toHaveValue('');
+  });
+
+  it('follows the clock across midnight while it stays open', async () => {
+    // 23:50 in Paris on the Tuesday, the screen left open - spec 10's "the
+    // checklist gets ticked at 23h in bed", and a home-screen PWA is resumed
+    // from the background rather than reloaded, so nothing else corrects it.
+    vi.setSystemTime(new Date('2026-10-06T21:50:00Z'));
+    render(<Today userId="u1" />);
+    expect(await screen.findByRole('heading', { name: 'mardi 6 octobre' })).toBeInTheDocument();
+
+    vi.setSystemTime(new Date('2026-10-06T22:10:00Z'));
+    document.dispatchEvent(new Event('visibilitychange'));
+
+    expect(await screen.findByRole('heading', { name: 'mercredi 7 octobre' })).toBeInTheDocument();
+
+    // And the ticks go to the new day. Landing on the 6th would silently
+    // re-validate a day already stamped, leave the 7th with nothing, and
+    // break the streak.
+    await userEvent.click(screen.getByRole('checkbox', { name: 'Calories respectées' }));
+    await waitFor(async () => { expect(await db.dayLogs.count()).toBe(1); });
+    const row = await db.dayLogs.toCollection().first();
+    expect(row?.date).toBe('2026-10-07');
+    expect(row?.ticks.calories).toBe(true);
+  });
 });
