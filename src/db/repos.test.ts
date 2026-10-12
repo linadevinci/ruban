@@ -5,7 +5,7 @@ import {
   getDayLog, getOrCreateDayLog, getOrCreateWeekPlan, getSettings, getWeekPlan,
   listCalorieEntries, listCycles, listDayLogs, listRuns, listWeights,
   saveCalorieEntry, saveCycle, saveRun, saveSettings, saveWeight, softDelete,
-  updateDayLog, updateWeekPlan,
+  stampDayLog, updateDayLog, updateWeekPlan,
 } from '@/db/repos';
 import { DEFAULT_NO_DINNER_DAYS, DEFAULT_RUN_DAYS, type Settings } from '@/domain/types';
 
@@ -121,6 +121,82 @@ describe('updateDayLog', () => {
     ]);
     const log = await getOrCreateDayLog('u1', '2026-10-10');
     expect(log.ticks).toEqual({ course: true, calories: true });
+  });
+});
+
+describe('stampDayLog', () => {
+  it('stamps both fields and enqueues one outbox row when the day did not exist yet', async () => {
+    await db.outbox.clear();
+    const stamps = await stampDayLog('u1', '2026-10-06');
+    expect(stamps).toEqual({ validatedNow: true, fireBonus: true });
+    const log = await getDayLog('u1', '2026-10-06');
+    // typeof, not not.toBeNull(): on a row that was never written log is
+    // undefined, and expect(undefined).not.toBeNull() passes.
+    expect(typeof log?.validatedAt).toBe('string');
+    expect(typeof log?.bonusFiredAt).toBe('string');
+    // One event, one instant, and one write: two rows would mean a create and
+    // an update ran as separate writes.
+    expect(log?.validatedAt).toBe(log?.bonusFiredAt);
+    expect(log?.updatedAt).toBe(log?.validatedAt);
+    expect(await db.dayLogs.count()).toBe(1);
+    expect(await db.outbox.count()).toBe(1);
+  });
+
+  it('stamps only the fields that are still null, and touches nothing else', async () => {
+    const created = await updateDayLog('u1', '2026-10-06', {
+      validatedAt: '2026-10-06T19:00:00.000Z',
+      ticks: { course: true }, steps: 8200,
+    });
+    const stamps = await stampDayLog('u1', '2026-10-06');
+    expect(stamps).toEqual({ validatedNow: false, fireBonus: true });
+    const log = await getDayLog('u1', '2026-10-06');
+    expect(log?.id).toBe(created.id);
+    expect(log?.validatedAt).toBe('2026-10-06T19:00:00.000Z');
+    expect(typeof log?.bonusFiredAt).toBe('string');
+    expect(log?.ticks).toEqual({ course: true });
+    expect(log?.steps).toBe(8200);
+  });
+
+  it('stamps a missing validatedAt without moving an already fired bonus', async () => {
+    // The mirror of the case above, so each field is pinned on its own rather
+    // than both by one assertion.
+    await updateDayLog('u1', '2026-10-06', { bonusFiredAt: '2026-10-06T19:00:00.000Z' });
+    const stamps = await stampDayLog('u1', '2026-10-06');
+    expect(stamps).toEqual({ validatedNow: true, fireBonus: false });
+    const log = await getDayLog('u1', '2026-10-06');
+    expect(log?.bonusFiredAt).toBe('2026-10-06T19:00:00.000Z');
+    expect(typeof log?.validatedAt).toBe('string');
+  });
+
+  it('writes nothing once both stamps are set', async () => {
+    await stampDayLog('u1', '2026-10-06');
+    const stamped = await getDayLog('u1', '2026-10-06');
+    await db.outbox.clear();
+    const again = await stampDayLog('u1', '2026-10-06');
+    expect(again).toEqual({ validatedNow: false, fireBonus: false });
+    const log = await getDayLog('u1', '2026-10-06');
+    expect(typeof log?.validatedAt).toBe('string');
+    // nowIso() never repeats, so a redundant write would move all three.
+    expect(log?.validatedAt).toBe(stamped?.validatedAt);
+    expect(log?.bonusFiredAt).toBe(stamped?.bonusFiredAt);
+    expect(log?.updatedAt).toBe(stamped?.updatedAt);
+    expect(await db.outbox.count()).toBe(0);
+  });
+
+  it('reports the bonus to exactly one of two racing callers', async () => {
+    // The check and the set must share one transaction. Reading the row first
+    // and writing after would let both callers see validatedAt: null, both
+    // stamp, and both fire the one-time celebration.
+    await updateDayLog('u1', '2026-10-10', { ticks: { course: true } });
+    await db.outbox.clear();
+    const stamps = await Promise.all([
+      stampDayLog('u1', '2026-10-10'),
+      stampDayLog('u1', '2026-10-10'),
+    ]);
+    expect(stamps.filter((s) => s.fireBonus)).toHaveLength(1);
+    expect(stamps.filter((s) => s.validatedNow)).toHaveLength(1);
+    expect(await db.dayLogs.count()).toBe(1);
+    expect(await db.outbox.count()).toBe(1);
   });
 });
 

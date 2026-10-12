@@ -84,7 +84,7 @@ export async function softDelete(
     const updated = await db[table].update(id, { deletedAt, updatedAt: deletedAt });
     // update() resolves 0 for a missing key without throwing, and get() then
     // returns undefined. Enqueuing anyway would hand Plan 4's engine a change
-    // carrying no id — reachable by double-tapping a delete button, or by a
+    // carrying no id - reachable by double-tapping a delete button, or by a
     // delete racing a pull that already tombstoned the row.
     if (updated === 0) return;
     const row = await db[table].get(id);
@@ -162,6 +162,59 @@ export async function updateDayLog(
     await enqueue('dayLogs', 'put', row);
   });
   return row;
+}
+
+/** Which stamps a stampDayLog call actually applied, not what it was asked for. */
+export interface DayStamps {
+  validatedNow: boolean;
+  fireBonus: boolean;
+}
+
+/**
+ * Stamps validatedAt and bonusFiredAt, each only if it is still null, and
+ * reports which of the two this call applied.
+ *
+ * The check and the set share ONE transaction and both read the STORED row.
+ * Deciding from a value read earlier - a useLiveQuery snapshot such as
+ * TodayView.log, or even a getDayLog in a transaction of its own - is the
+ * lost-update shape already fixed in updateDayLog above, and here it is worse
+ * than a clobbered tick: two calls in flight together (an effect that
+ * StrictMode double-invokes, or a re-render before the live query delivers the
+ * new row) would both read null, both stamp, and both report fireBonus,
+ * firing the one-time celebration twice.
+ *
+ * Stamps are facts, so neither field is ever cleared or moved once set, and a
+ * call with nothing left to stamp writes nothing and queues nothing - a
+ * second outbox row would be a sync push for a day nothing changed on.
+ */
+export async function stampDayLog(userId: string, date: IsoDate): Promise<DayStamps> {
+  let stamps!: DayStamps;
+  await db.transaction('rw', db.dayLogs, db.outbox, async () => {
+    const existing = await db.dayLogs.where('[userId+date]').equals([userId, date]).first();
+    const base: DayLog = existing ?? {
+      id: newId(), userId, date, ticks: {}, steps: null, waterGlasses: null,
+      jokered: false, validatedAt: null, bonusFiredAt: null,
+      mood: null, energy: null, note: null,
+      updatedAt: nowIso(), deletedAt: null,
+    };
+    stamps = {
+      validatedNow: base.validatedAt === null,
+      fireBonus: base.bonusFiredAt === null,
+    };
+    if (!stamps.validatedNow && !stamps.fireBonus) return;
+    // One instant for one event: the stamps and updatedAt agree, and nowIso()
+    // never repeats, so updatedAt is strictly newer than the row's previous one.
+    const stamp = nowIso();
+    const row: DayLog = {
+      ...base,
+      validatedAt: base.validatedAt ?? stamp,
+      bonusFiredAt: base.bonusFiredAt ?? stamp,
+      updatedAt: stamp,
+    };
+    await db.dayLogs.put(row);
+    await enqueue('dayLogs', 'put', row);
+  });
+  return stamps;
 }
 
 /** Read-only counterpart to getOrCreateWeekPlan; see getDayLog. */
