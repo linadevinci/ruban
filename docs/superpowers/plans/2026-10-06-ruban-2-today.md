@@ -1413,6 +1413,8 @@ git commit -m "feat: add onboarding that writes the settings row"
 - Create: `src/features/today/useToday.ts`
 - Test: `src/features/today/useToday.test.ts`
 
+**One survivor in this file is an equivalent mutant, not a gap — recorded so nobody spends another round on it.** Leaving `calorieEntriesWeek` unfiltered in the hook passes every test and always will: its only consumer is `weekCalorieTotal(entries, week)`, which filters internally with `new Set(datesOfIsoWeek(week))` using the same week the hook filtered by, so the unfiltered list yields an identical sum for every possible input. The filter stays because it keeps the module's stated input contract, and a comment at the line says so. Three mutation rounds and 50+ mutations have otherwise pinned this file.
+
 **These code blocks are copied verbatim from the shipped files.** Three defects were found while implementing: `plan.jokerUsedOn` did not compile, because `plan` is the narrow `ChecklistPlan` and the joker field lives on the raw `input.plan`; the nine original tests did not cover `calorieTotal` at all, so a hard-coded 0 passed every one of them; and the tombstone check was inline in the hook rather than in a testable pure helper. The shipped version fixes all three.
 
 **Interfaces:**
@@ -1439,7 +1441,9 @@ import { db } from '@/db/schema';
 import {
   blankDayLog, buildTodayView, useToday, type TodayInputs,
 } from '@/features/today/useToday';
-import type { DayLog, Settings, WeekPlan } from '@/domain/types';
+import type {
+  CalorieEntry, DayLog, Run, Settings, WeekPlan,
+} from '@/domain/types';
 
 const settings: Settings = {
   userId: 'u1', timezone: 'Europe/Paris',
@@ -1468,6 +1472,19 @@ function log(partial: Partial<DayLog> = {}): DayLog {
     date: '2026-10-06', ticks: {}, steps: null, waterGlasses: null,
     jokered: false, validatedAt: null, bonusFiredAt: null,
     mood: null, energy: null, note: null, ...partial,
+  };
+}
+
+function run(id: string, date: string): Run {
+  return {
+    id, userId: 'u1', updatedAt: '', deletedAt: null,
+    date, distanceKm: 5, durationS: 1500, note: null,
+  };
+}
+
+function entry(id: string, date: string, kcal: number): CalorieEntry {
+  return {
+    id, userId: 'u1', updatedAt: '', deletedAt: null, date, kcal, label: null,
   };
 }
 
@@ -1509,6 +1526,28 @@ describe('buildTodayView', () => {
     expect(view.weeklyBudget).toBe(5 * 1500 + 2 * 900);
   });
 
+  it('satisfies course from a run on a day the stored plan makes a run day', () => {
+    // 2026-10-07 is a Wednesday, ISO weekday 3, which this plan's runDays make
+    // a run day - so `course` is applicable, and runsToday is the only thing
+    // that can satisfy it here: ticks.course is unset and there are no calorie
+    // entries for a miscounted length to stand in for the run count.
+    const view = buildTodayView(inputs({
+      date: '2026-10-07',
+      log: log({ date: '2026-10-07' }),
+      runsToday: [{ date: '2026-10-07', distanceKm: 5, durationS: 1500 }],
+    }));
+    expect(view.items).toContainEqual({ id: 'course', satisfied: true });
+  });
+
+  it('leaves course unsatisfied on a run day with no run logged', () => {
+    const view = buildTodayView(inputs({
+      date: '2026-10-07',
+      log: log({ date: '2026-10-07' }),
+      runsToday: [],
+    }));
+    expect(view.items).toContainEqual({ id: 'course', satisfied: false });
+  });
+
   it('validates the day when every applicable item is satisfied', () => {
     const view = buildTodayView(inputs({
       // No run on purpose: course is not applicable under this plan, so
@@ -1546,7 +1585,12 @@ describe('buildTodayView', () => {
 
   it('counts the streak from the supplied day logs', () => {
     const view = buildTodayView(inputs({
+      // startDate has to clip the walk, or a looser one would count the same.
+      // 2026-10-03 is covered and consecutive, and sits a day before the start,
+      // so only settings.startDate keeps it out of the count.
+      settings: { ...settings, startDate: '2026-10-04' },
       dayLogs: [
+        log({ date: '2026-10-03', validatedAt: '2026-10-03T21:00:00Z' }),
         // Jokered, not validated: a joker covers a day just as validation does.
         log({ date: '2026-10-04', jokered: true }),
         log({ date: '2026-10-05', validatedAt: '2026-10-05T21:00:00Z' }),
@@ -1556,9 +1600,10 @@ describe('buildTodayView', () => {
   });
 
   it("counts today's own log even when dayLogs does not carry it yet", () => {
-    // The hook reads today's row with getDayLog and lists the rest with
-    // listDayLogs, as two concurrent reads, so today's row can be missing
-    // from the list.
+    // listDayLogs lists them all, today's row included, so dayLogs usually
+    // carries it and the push is a duplicate that currentStreak's Set absorbs.
+    // The case that needs the push is this one: on a day with no stored row,
+    // `log` is blankDayLog's placeholder, which no list can supply.
     const view = buildTodayView(inputs({
       dayLogs: [],
       log: log({ validatedAt: '2026-10-06T21:00:00Z' }),
@@ -1614,8 +1659,9 @@ describe('blankDayLog', () => {
   });
 
   it('carries no id, because no such row exists', () => {
-    // An id here would be either a tombstoned row's (a later write would reach
-    // the invisible row) or a fresh one on every re-run of the querier.
+    // An id here would be either a tombstoned row's, which no caller could
+    // tell from a live one, or a fresh one minted on every re-run of the
+    // querier. The empty string can be mistaken for neither.
     expect(blankDayLog('u1', '2026-10-06').id).toBe('');
   });
 });
@@ -1691,9 +1737,23 @@ describe('useToday', () => {
     const { result } = renderHook(() => useToday('u1'));
     await waitFor(() => expect(result.current).toBeDefined());
 
-    // The placeholder, id and all: a view built on the tombstoned row's id
-    // could send a later write to the invisible row.
+    // The placeholder, id and all: the tombstoned row's ticks, steps, joker
+    // and validation must not reach the view, and nor must its id.
     expect(result.current?.log).toEqual(blankDayLog('u1', '2026-10-06'));
+  });
+
+  it('reads the date in the stored zone rather than in UTC', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    // 00:30 on the 7th in Paris, still the 6th in UTC. The mirror image of the
+    // fallback case below: between them, only settings.timezone gives the date
+    // these two cases expect.
+    vi.setSystemTime(new Date('2026-10-06T22:30:00Z'));
+    await db.settings.put(settings);
+
+    const { result } = renderHook(() => useToday('u1'));
+    await waitFor(() => expect(result.current).toBeDefined());
+
+    expect(result.current?.date).toBe('2026-10-07');
   });
 
   it('falls back to UTC when the stored timezone is one this runtime rejects', async () => {
@@ -1707,6 +1767,47 @@ describe('useToday', () => {
     await waitFor(() => expect(result.current).toBeDefined());
 
     expect(result.current?.date).toBe('2026-10-06');
+  });
+
+  it('feeds the stored plan, logs, runs and week entries into the view', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    // Midday in Paris on Wednesday 2026-10-07, which is in 2026-W41 - the week
+    // the stored plan below is keyed to.
+    vi.setSystemTime(new Date('2026-10-07T10:00:00Z'));
+    await db.settings.put(settings);
+    await db.weekPlans.put(plan);
+    await db.dayLogs.bulkPut([
+      log({ id: 'l5', date: '2026-10-05', validatedAt: '2026-10-05T21:00:00Z' }),
+      log({ id: 'l6', date: '2026-10-06', validatedAt: '2026-10-06T21:00:00Z' }),
+    ]);
+    // Nothing on 2026-10-07 itself, in either table: that is what makes the
+    // two per-day filters observable, because an unfiltered list would hand
+    // the build a run count and an entry count that today did not earn.
+    await db.runs.bulkPut([run('r6', '2026-10-06'), run('r28', '2026-09-28')]);
+    await db.calorieEntries.bulkPut([
+      entry('c6', '2026-10-06', 1400),
+      entry('c5', '2026-10-05', 1450),
+      // 2026-09-28 is the Monday of 2026-W40, so weekDates must exclude it.
+      entry('c28', '2026-09-28', 2000),
+    ]);
+
+    const { result } = renderHook(() => useToday('u1'));
+    await waitFor(() => expect(result.current).toBeDefined());
+
+    const view = result.current;
+    expect(view?.date).toBe('2026-10-07');
+    // The stored plan reached the build: it makes Wednesday a run day and not
+    // a no-dinner evening, where the defaults do the exact opposite.
+    expect(view?.items.map((i) => i.id)).toEqual(['course', 'calories', 'steps', 'water']);
+    expect(view?.items).toContainEqual({ id: 'course', satisfied: false });
+    expect(view?.items).toContainEqual({ id: 'calories', satisfied: false });
+    // listDayLogs reached it too: the two covered days before an uncovered
+    // today, with today's own row absent and a placeholder in its place.
+    expect(view?.streak).toBe(2);
+    // Six days at the daily target plus the Tuesday allowance this plan marks,
+    // less the two in-week entries and not the 2026-W40 one.
+    expect(view?.weeklyBudget).toBe(6 * 1500 + 900);
+    expect(view?.weeklyRemaining).toBe(6 * 1500 + 900 - 2850);
   });
 
   it('resolves to undefined while no settings row exists', async () => {
@@ -1812,9 +1913,10 @@ export function buildTodayView(input: TodayInputs): TodayView {
   const coverage = input.dayLogs.map((row) => ({
     date: row.date, validatedAt: row.validatedAt, jokered: row.jokered,
   }));
-  // The current day's own row may not be in dayLogs yet: the hook reads it
-  // with getDayLog and lists the rest with listDayLogs, as two concurrent
-  // reads, and on a day with no stored row it is a placeholder besides.
+  // listDayLogs lists them all, today's row included, so this push is usually
+  // a duplicate - and an idempotent one, because currentStreak reduces the
+  // coverage to a Set of dates. It is here for the day that has no stored row
+  // at all: `log` is then blankDayLog's placeholder, which no list can supply.
   coverage.push({ date, validatedAt: log.validatedAt, jokered: log.jokered });
 
   return {
@@ -1843,10 +1945,16 @@ export function buildTodayView(input: TodayInputs): TodayView {
  *
  * The id is deliberately an empty string, because this row does not exist in
  * the database: every write must key off `date`, which is what
- * updateDayLog(userId, date, patch) takes, and never off `view.log.id`. A
- * placeholder carrying the tombstoned row's id would send a later write to the
- * invisible row; one carrying a freshly minted id would mint a new one on
- * every re-run of the querier.
+ * updateDayLog(userId, date, patch) takes, and never off `view.log.id`. What
+ * the empty string buys is an id no caller can mistake for a real row's, where
+ * a tombstoned row's id would be indistinguishable from a live one, and no
+ * fresh id minted on every re-run of the querier.
+ *
+ * It buys no protection against a write reaching a tombstoned row. Writes look
+ * rows up by `[userId+date]`, which does not filter `deletedAt`, so a tick on
+ * a tombstoned day lands on the invisible row whatever id this carries. That
+ * is unreachable until the sync phase can tombstone a day log, and the fix
+ * belongs to the repo layer rather than here.
  */
 export function blankDayLog(userId: string, date: IsoDate): DayLog {
   return {
@@ -1890,6 +1998,9 @@ export function useToday(userId: string): TodayView | undefined {
       date, settings, plan, log: log ?? blankDayLog(userId, date), dayLogs,
       runsToday: runs.filter((r) => r.date === date),
       calorieEntriesToday: calorieEntries.filter((e) => e.date === date),
+      // This one keeps the input contract at the top of the file rather than
+      // changing a result: weekCalorieTotal filters by the same week, so no
+      // test can tell the filtered list from the unfiltered one.
       calorieEntriesWeek: calorieEntries.filter((e) => weekDates.has(e.date)),
     });
   }, [userId]);
@@ -1899,7 +2010,7 @@ export function useToday(userId: string): TodayView | undefined {
 - [ ] **Step 4: Run the tests**
 
 Run: `npm test -- useToday`
-Expected: PASS, 22 tests.
+Expected: PASS, 26 tests.
 
 The brief originally asked for nine and they were not enough twice over: a reviewer showed that hard-coding the day's calorie total to 0 passed every one of them, and that a fixture whose week plan was byte-identical to the defaults meant the stored plan could be ignored entirely with no test noticing. The six `useToday` cases matter most — all nine original tests exercised only the pure `buildTodayView`, which is why a hook that could never resolve went unnoticed.
 
