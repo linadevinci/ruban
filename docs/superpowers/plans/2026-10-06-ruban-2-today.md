@@ -3605,3 +3605,30 @@ which day a tap excuses — spending the week's only joker on the wrong day is u
 **Done when:** rule 6 has a test that fails against `isoWeekOf(date)`; `canUseJoker`'s `age <= 1`
 branch is reachable from a screen; and no `getOrCreate*` appears in a querier.
 
+**Outcome: all three met, and the rule 6 debt carried since Plan 1 is closed.** Verified by
+mutation from both ends — moving the spend to `spendJoker(userId, view.date)` turns the
+boundary test red, and swapping the view model to `input.plan?.jokerUsedOn` fails four tests.
+Both directions are pinned: a joker spent in W41 withholds the excuse while W42's is untouched,
+and one spent in W42 does **not** withhold it while W41's is intact — the second being what
+catches a one-row implementation.
+
+Two things worth keeping. The second week-plan read had to stay inside the querier's existing
+`Promise.all`, because Dexie tracks what a querier observed through its own promise zone and a
+read started outside it would not re-run the querier — so a write to last week's plan would
+not re-render the screen. That was **confirmed rather than assumed**, by swapping the read to
+`getOrCreateWeekPlan` and getting `ReadOnlyError`: the error proves the read sits inside the
+observation context. A known failure used as a positive probe.
+
+And a thirteenth test-that-cannot-fail, found by the implementer's own mutation sweep rather
+than by review. Its first "withholds the excuse on an already jokered yesterday" used the
+*coherent* state: yesterday's row jokered **and** that week's `jokerUsedOn` set. Either alone
+refuses the excuse, so no single mutation could make the test fail — it appeared in none of
+the twelve failure lists. Rewritten to leave `jokerUsedOn` null so it pins the coverage branch
+alone. **A test built from a realistic state can be unfalsifiable precisely because the state is
+over-determined**, which no amount of reading it would reveal.
+
+**Deviation accepted:** today's button was renamed from `Utiliser mon joker` to
+`Excuser aujourd\u2019hui`, parallel with `Excuser dimanche 11 octobre`. I asked only for the
+yesterday label, but with both buttons on screen the old wording does not say which day it means,
+and the task required that to be unmistakable — one joker a week, and spending it on the
+wrong day cannot be undone.
