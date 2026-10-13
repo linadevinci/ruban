@@ -1461,6 +1461,19 @@ git commit -m "feat: add the client sync engine with an injectable transport"
 
 **Interfaces:**
 - Produces: `<Account userId />` — signed-out state offers sign-up and sign-in; signed-in state shows the username, pending count, last sync and a "Synchroniser" button. Sign-up shows the recovery code **once**, with a confirmation checkbox before dismissing it.
+- Also produces: **sign-out**, and **signing in as a different account on the same device**.
+
+**This task was missing more than UI, and the missing part is plumbing.** The user asked for a username-only login "so that we can have multiple accounts", and as written this plan gives one account per device: `<Account userId />` takes a fixed id, there is no sign-out anywhere in the five plans, and the shell's gate reads *no current user → onboarding*. So signing out would drop her into onboarding, `ensureLocalUser` would mint a **new** local id, and she would come back as a stranger with an empty app instead of signing back in. Three things are needed:
+
+1. **Sign out** — clear `currentUserId` from `db.meta`. Refuse while the outbox is non-empty, or sync first and say so: signing out with unpushed rows on a device she then hands to someone else is how a day's ticks disappear for good.
+2. **A third shell state.** `src/app/App.tsx` currently has *opening / failed / open*, and then *no user → onboarding*. It needs *no user, but accounts exist on this device or on the server* → offer sign-in, with onboarding as the deliberate "start fresh" choice rather than the default. Onboarding must never be reachable by accident from a signed-out state.
+3. **Adopting an id on sign-in.** Sign-**up** claims the local rows for the new account, which is what the smoke test checks. Sign-**in** to an account that already exists must adopt the *server's* user id and point `currentUserId` at it — it must not keep a locally minted id, or the device writes rows under an id the server has never heard of and the pull returns nothing she recognises.
+
+**The data model already supports this and needs no change**, which is why it is cheap: every table is keyed by `userId`, with `[userId+date]` and `[userId+isoWeek]` compound indexes, so two accounts' rows coexist in one IndexedDB without either seeing the other.
+
+**Decision on sign-out, stated rather than assumed: the local rows stay on the device.** They are hers, and wiping them would throw away anything the outbox has not pushed. The consequence to be honest about: on a shared device the other account's rows remain in that browser's storage — never displayed, since every read filters by `userId`, but present. So offer wiping as a separate, explicit, confirmed action ("retirer les données de cet appareil"), never as a side effect of signing out.
+
+**Tests owed:** signing out and back in to the same account shows her data again, not an empty app; signing out does not reach onboarding; two accounts on one device never see each other's rows (seed both, assert each reads only its own); sign-in adopts the server id rather than a local one; and sign-out with a non-empty outbox either refuses or syncs first.
 
 - [ ] **Step 1: Implement the account panel**
 
