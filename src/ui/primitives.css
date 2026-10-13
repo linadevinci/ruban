@@ -13,6 +13,14 @@
   padding: 11px 20px;
   cursor: pointer;
   border: 1px solid transparent;
+  /* 44px, iOS's touch-target guideline, reached with a floor rather than with
+     more padding so the pill does not grow sideways. inline-flex because a
+     min-height on a button with static content would otherwise leave the text
+     at the top. */
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 .btn:disabled { opacity: 0.5; cursor: default; }
 .btn--solid { background: var(--cerise); color: var(--surface); }
@@ -31,7 +39,11 @@
 
 .stepper { display: flex; align-items: center; gap: 12px; }
 .stepper__btn {
-  width: 34px; height: 34px;
+  /* 44px square, iOS's guideline: this is the water counter, tapped six or
+     more times a day, one-handed. The row it sits in is name-on-the-left,
+     stepper-on-the-right with a 12px gap, so 20px more across the three
+     elements still fits a 320px screen several times over. */
+  width: 44px; height: 44px;
   display: grid; place-items: center;
   font: inherit; font-size: var(--step-1); line-height: 1;
   background: var(--inset); color: var(--ink);

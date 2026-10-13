@@ -11,6 +11,16 @@
 }
 .tabbar a {
   flex: 1;
+  /* 44px tall, iOS's touch-target guideline. At 4px of padding around a
+     ~19px line this row came out around 27px - the smallest target in the
+     app, and the one every change of screen goes through. A floor plus
+     centring rather than more padding, so the label stays put. position:
+     relative anchors the active mark below it. */
+  min-height: 44px;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   text-align: center;
   text-decoration: none;
   color: var(--ink-soft);
@@ -18,7 +28,24 @@
   font-weight: 500;
   padding: 4px 2px;
 }
-.tabbar a[aria-current="page"] { color: var(--cerise); }
+/* The active tab in three channels, where it used to have one. Colour alone
+   cannot carry it here: spec 10 measures cerise at 5.69:1 and ink-soft at
+   5.64:1 on the surface, so the two sit at near-identical luminance and the
+   active tab is indistinguishable in greyscale - which is why every chart in
+   this project signals identity by mark type rather than by hue. Weight and
+   the underline mark TabBar renders are the other two. */
+.tabbar a[aria-current="page"] { color: var(--cerise); font-weight: 700; }
+.tabbar__mark {
+  /* Absolute, so turning the mark on does not move the label it sits under. */
+  position: absolute;
+  bottom: 2px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 16px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--cerise);
+}
 
 /* The open-failure panel. It is the only thing on screen when it shows, so it
    sits in the middle of the page rather than at the top like a card. */
