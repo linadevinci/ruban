@@ -168,6 +168,13 @@ export function Today({ userId }: { userId: string }) {
     report(spendJoker(userId, view.date));
   };
 
+  const excuseYesterday = () => {
+    // view.yesterday, never view.date: spendJoker derives the week it spends
+    // from the date it is handed, so passing today's date here would both
+    // joker the wrong day and charge the wrong week on a Monday.
+    report(spendJoker(userId, view.yesterday));
+  };
+
   // The draft while she is typing into the field, the stored count otherwise.
   const stepsText = stepsDraft !== null && stepsDraft.date === view.date
     ? stepsDraft.text
@@ -196,7 +203,10 @@ export function Today({ userId }: { userId: string }) {
         daysLeft={view.daysLeft}
         cycleComplete={view.cycleComplete}
         jokerAvailable={view.jokerAvailable}
+        yesterday={view.yesterday}
+        yesterdayExcusable={view.yesterdayExcusable}
         onUseJoker={useJoker}
+        onExcuseYesterday={excuseYesterday}
       />
 
       <Card laced>

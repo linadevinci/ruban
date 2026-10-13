@@ -51,6 +51,26 @@ const TUESDAY = '2026-10-06';
 /** Midday in Paris on that Tuesday. */
 const TUESDAY_NOON = new Date('2026-10-06T10:00:00Z');
 
+/**
+ * Monday 2026-10-12 and Sunday 2026-10-11, verified against the calendar:
+ * ISO weeks start on Monday, so the Sunday closes 2026-W41 and the Monday
+ * opens 2026-W42. On every other weekday a date and its yesterday share a
+ * week, which is why rule 6 - the joker is charged to the week of the day
+ * being EXCUSED - could not be told from a one-week implementation until
+ * yesterday became excusable at all.
+ */
+const MONDAY_NOON = new Date('2026-10-12T10:00:00Z');
+const MONDAY = '2026-10-12';
+const SUNDAY = '2026-10-11';
+
+/**
+ * The two button labels, each naming the day its tap spends the joker on.
+ * There is one joker per ISO week and no way to take it back, so a label that
+ * did not say which day it meant would be the worst ambiguity on the screen.
+ */
+const EXCUSE_TODAY = 'Excuser aujourd\u2019hui';
+const EXCUSE_SUNDAY = 'Excuser dimanche 11 octobre';
+
 function log(partial: Partial<DayLog> = {}): DayLog {
   return {
     id: 'l1', userId: 'u1', date: TUESDAY, ticks: {}, steps: null, waterGlasses: null,
@@ -160,7 +180,7 @@ describe('Today', () => {
     vi.setSystemTime(new Date('2026-10-11T10:00:00Z'));
 
     render(<Today userId="u1" />);
-    await userEvent.click(await screen.findByRole('button', { name: 'Utiliser mon joker' }));
+    await userEvent.click(await screen.findByRole('button', { name: EXCUSE_TODAY }));
 
     await waitFor(async () => { expect(await db.weekPlans.count()).toBe(1); });
     const plan = (await db.weekPlans.toArray())[0];
@@ -172,8 +192,82 @@ describe('Today', () => {
     expect(row?.jokered).toBe(true);
     // The offer goes away: a jokered day is covered, and the week has one joker.
     await waitFor(() => {
-      expect(screen.queryByRole('button', { name: 'Utiliser mon joker' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: EXCUSE_TODAY })).not.toBeInTheDocument();
     });
+  });
+
+  it("excuses yesterday into yesterday's own ISO week, not this week's", async () => {
+    // Rule 6, on the one weekday that can tell the two apart. The Sunday being
+    // excused belongs to 2026-W41; the Monday the tap happens on is in W42.
+    vi.setSystemTime(MONDAY_NOON);
+
+    render(<Today userId="u1" />);
+    await userEvent.click(await screen.findByRole('button', { name: EXCUSE_SUNDAY }));
+
+    await waitFor(async () => { expect(await db.weekPlans.count()).toBe(1); });
+    const plan = (await db.weekPlans.toArray())[0];
+    expect(plan?.isoWeek).toBe('2026-W41');
+    expect(plan?.jokerUsedOn).toBe(SUNDAY);
+
+    // One transaction: the day log moved with the plan, so a spend that
+    // charged the week without marking the day fails here.
+    const rows = await db.dayLogs.toArray();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.date).toBe(SUNDAY);
+    expect(rows[0]?.jokered).toBe(true);
+    expect(rows.some((row) => row.date === MONDAY)).toBe(false);
+
+    // The Sunday is covered now, so its offer is gone - and today's is still
+    // here, because W42's joker was never touched. Two weeks, two budgets.
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: EXCUSE_SUNDAY })).not.toBeInTheDocument();
+    });
+    expect(screen.getByRole('button', { name: EXCUSE_TODAY })).toBeInTheDocument();
+  });
+
+  it('repairs the streak when yesterday is excused', async () => {
+    vi.setSystemTime(MONDAY_NOON);
+    // Saturday earned, Sunday missed, Monday earned: the walk back from today
+    // stops dead at the Sunday, so two earned days show as one.
+    await db.dayLogs.bulkPut([
+      log({ id: 'l10', date: '2026-10-10', validatedAt: '2026-10-10T21:00:00.000Z' }),
+      log({ id: 'l12', date: MONDAY, validatedAt: '2026-10-12T21:00:00.000Z' }),
+    ]);
+
+    render(<Today userId="u1" />);
+    const streak = await screen.findByTestId('streak');
+    expect(await within(streak).findByText('1')).toBeInTheDocument();
+
+    await userEvent.click(await screen.findByRole('button', { name: EXCUSE_SUNDAY }));
+
+    expect(await within(streak).findByText('3')).toBeInTheDocument();
+    expect(within(streak).getByText("jours d'affilée")).toBeInTheDocument();
+  });
+
+  it('makes no offer for a yesterday that is already covered', async () => {
+    vi.setSystemTime(MONDAY_NOON);
+    await db.dayLogs.put(log({
+      id: 'l11', date: SUNDAY, validatedAt: '2026-10-11T21:00:00.000Z',
+    }));
+
+    render(<Today userId="u1" />);
+    // Today's offer is here, so the absence below is about the Sunday being
+    // covered and not about the card having gone missing.
+    expect(await screen.findByRole('button', { name: EXCUSE_TODAY })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: EXCUSE_SUNDAY })).not.toBeInTheDocument();
+  });
+
+  it('holds the joker in reserve rather than reading as a verdict', async () => {
+    vi.setSystemTime(MONDAY_NOON);
+    render(<Today userId="u1" />);
+
+    // At midday on a day she has every intention of finishing, the card says
+    // the joker is there - not that something went wrong.
+    expect(await screen.findByText('Ton joker de la semaine est intact, au cas où.'))
+      .toBeInTheDocument();
+    // And each offer names its day, in full rather than abbreviated.
+    expect(screen.getByRole('button', { name: EXCUSE_TODAY })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: EXCUSE_SUNDAY })).toBeInTheDocument();
   });
 
   it('fires the one-time bonus when the last item is ticked, and never twice', async () => {
@@ -493,7 +587,7 @@ describe('Today', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(OOPS);
     await userEvent.click(screen.getByRole('button', { name: 'Fermer' }));
 
-    fireEvent.click(screen.getByRole('button', { name: 'Utiliser mon joker' }));
+    fireEvent.click(screen.getByRole('button', { name: EXCUSE_TODAY }));
     expect(await screen.findByRole('alert')).toHaveTextContent(OOPS);
 
     // None of the three landed.

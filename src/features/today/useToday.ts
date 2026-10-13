@@ -25,14 +25,24 @@ interface CalorieRow { date: IsoDate; kcal: number }
 /**
  * Coherence invariant, which the caller owes and this module does not re-check:
  * `log.date === date`, `plan` is the plan of `isoWeekOf(date)` (or undefined),
- * and `calorieEntriesWeek` covers that same week. useToday derives all four
- * from one `date`, so the only way to break it is a hand-built input.
+ * `yesterdayPlan` is the plan of `isoWeekOf(addDays(date, -1))`, and
+ * `calorieEntriesWeek` covers `plan`'s week. useToday derives all five from
+ * one `date`, so the only way to break it is a hand-built input.
  */
 export interface TodayInputs {
   date: IsoDate;
   settings: Settings;
   /** Absent until the week is first edited; effectiveWeekPlan supplies defaults. */
   plan: WeekPlan | undefined;
+  /**
+   * The week plan of the day BEFORE `date`, which is the very same row as
+   * `plan` on six days in seven and a different one when `date` is a Monday -
+   * ISO weeks start on Monday, so a Monday's yesterday sits in the week that
+   * has already closed. Separate from `plan` because the joker is spent
+   * against the week of the day being excused (spec 4.4), and on a Monday
+   * reading today's row would consult, and then overwrite, the wrong week.
+   */
+  yesterdayPlan: WeekPlan | undefined;
   log: DayLog;
   dayLogs: DayLog[];
   runsToday: RunRow[];
@@ -50,11 +60,19 @@ export interface TodayView {
    *  then empty, so a write keys off `date`, never off this. */
   log: DayLog;
   items: ChecklistItem[];
+  /** The day before `date`: the only other day the joker may be spent on. */
+  yesterday: IsoDate;
   validated: boolean;
   streak: number;
   daysLeft: number;
   cycleComplete: boolean;
+  /** True when the week's joker could still be spent on `date` itself. */
   jokerAvailable: boolean;
+  /**
+   * True when it could still be spent on `yesterday` instead - judged against
+   * YESTERDAY's week plan, which is the previous week's row on a Monday.
+   */
+  yesterdayExcusable: boolean;
   weeklyBudget: number;
   weeklyRemaining: number;
 }
@@ -64,6 +82,7 @@ export function buildTodayView(input: TodayInputs): TodayView {
   const { date, settings, log } = input;
   const plan = effectiveWeekPlan(input.plan);
   const week = isoWeekOf(date);
+  const yesterday = addDays(date, -1);
   // Section 4.7's sums come from the domain, not from each screen re-deriving them.
   const calorieTotal = dayCalorieTotal(input.calorieEntriesToday, date);
   const consumedThisWeek = weekCalorieTotal(input.calorieEntriesWeek, week);
@@ -84,8 +103,12 @@ export function buildTodayView(input: TodayInputs): TodayView {
   // at all: `log` is then blankDayLog's placeholder, which no list can supply.
   coverage.push({ date, validatedAt: log.validatedAt, jokered: log.jokered });
 
+  // Yesterday's stored row, if any. Taken from the same list the streak is
+  // counted off, so there is one source for what covered a past day.
+  const yesterdayRow = input.dayLogs.find((row) => row.date === yesterday);
+
   return {
-    date, settings, plan, log, items,
+    date, settings, plan, log, items, yesterday,
     validated: isDayValidated(items),
     streak: currentStreak(coverage, date, settings.startDate),
     daysLeft: daysUntil(settings.goalDate, date),
@@ -95,6 +118,23 @@ export function buildTodayView(input: TodayInputs): TodayView {
       coverage: { date, validatedAt: log.validatedAt, jokered: log.jokered },
       // ChecklistPlan is narrow; the joker lives on the stored row, if any.
       weekPlanJokerUsedOn: input.plan?.jokerUsedOn ?? null,
+    }),
+    // Spec 2 and 4.4: the joker is usable on today OR yesterday. canUseJoker
+    // has carried the `age <= 1` branch since the first plan; this is the
+    // first caller to reach it, and the first where the week of the date
+    // being judged is not necessarily the week of `today`.
+    yesterdayExcusable: canUseJoker({
+      date: yesterday, today: date, startDate: settings.startDate,
+      // No row at all means nothing covered yesterday, which canUseJoker
+      // reads as excusable rather than as missing data.
+      coverage: yesterdayRow === undefined ? undefined : {
+        date: yesterdayRow.date,
+        validatedAt: yesterdayRow.validatedAt,
+        jokered: yesterdayRow.jokered,
+      },
+      // Rule 6, and the whole reason yesterdayPlan is a separate input: the
+      // joker consulted here is the one belonging to YESTERDAY's ISO week.
+      weekPlanJokerUsedOn: input.yesterdayPlan?.jokerUsedOn ?? null,
     }),
     weeklyBudget: computeWeeklyBudget(week, plan, settings),
     weeklyRemaining: weeklyRemaining(week, plan, settings, consumedThisWeek),
@@ -248,11 +288,21 @@ export function useToday(userId: string): TodayView | undefined {
     if (!settings) return undefined;
 
     const week = isoWeekOf(date);
+    const yesterdayWeek = isoWeekOf(addDays(date, -1));
     const weekDates = new Set(datesOfIsoWeek(week));
 
-    const [plan, log, dayLogs, runs, calorieEntries] = await Promise.all([
+    const [plan, yesterdayPlanRow, log, dayLogs, runs, calorieEntries] = await Promise.all([
       // Read-only for the plan: opening the app must not invent a week plan.
       getWeekPlan(userId, week),
+      // And yesterday's, which is a second row only when today is a Monday;
+      // the other six days reuse the one above rather than query twice.
+      // Inside this Promise.all with every other read, not awaited after it:
+      // Dexie tracks what a querier observed through its own promise zone,
+      // and a read started outside that zone is a read this querier would
+      // not be re-run for.
+      yesterdayWeek === week
+        ? Promise.resolve(undefined)
+        : getWeekPlan(userId, yesterdayWeek),
       // Read-only for the log too, for the same reason and one more: Dexie's
       // observability middleware rejects any readwrite transaction opened in a
       // liveQuery context, so a getOrCreate here would make this querier
@@ -266,6 +316,7 @@ export function useToday(userId: string): TodayView | undefined {
 
     return buildTodayView({
       date, settings, plan, log: log ?? blankDayLog(userId, date), dayLogs,
+      yesterdayPlan: yesterdayWeek === week ? plan : yesterdayPlanRow,
       runsToday: runs.filter((r) => r.date === date),
       calorieEntriesToday: calorieEntries.filter((e) => e.date === date),
       // This one keeps the input contract at the top of the file rather than

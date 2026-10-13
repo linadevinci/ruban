@@ -43,4 +43,9 @@
 .today__week { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
 .today__weeknum { font-family: var(--font-display); font-size: var(--step-2); }
 .today__joker { margin: 0; color: var(--ink-soft); }
+/* Side by side while both labels fit, wrapped onto their own rows on a narrow
+   phone. The 8px gap is the point: .btn is already 44px tall, and two offers
+   that spend the same unrecoverable joker must not sit edge to edge where a
+   thumb could take the wrong one. */
+.today__jokeracts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
 .today__done { font-family: var(--font-hand); font-size: var(--step-2); color: var(--cerise); margin: 0; }

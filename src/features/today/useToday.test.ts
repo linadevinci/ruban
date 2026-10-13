@@ -53,13 +53,33 @@ function entry(id: string, date: string, kcal: number): CalorieEntry {
   };
 }
 
-// Coherent by construction: 2026-10-06 is in 2026-W41, and log.date matches.
-// A case that moves `date` has to move the plan's week and the log's date too.
+// Coherent by construction: 2026-10-06 is in 2026-W41, its yesterday
+// 2026-10-05 is the Monday of the SAME week, and log.date matches. A case that
+// moves `date` has to move both plans' weeks and the log's date too.
 function inputs(partial: Partial<TodayInputs> = {}): TodayInputs {
   return {
-    date: '2026-10-06', settings, plan, log: log(), dayLogs: [],
+    date: '2026-10-06', settings, plan, yesterdayPlan: plan, log: log(), dayLogs: [],
     runsToday: [], calorieEntriesToday: [], calorieEntriesWeek: [], ...partial,
   };
+}
+
+/**
+ * Monday 2026-10-12, in 2026-W42, whose yesterday is Sunday 2026-10-11, the
+ * last day of 2026-W41. Verified against the calendar: ISO weeks start on
+ * Monday, so this is the one weekday in seven where the week of `date` and
+ * the week of its yesterday are different rows - and so the only shape in
+ * which a test can tell rule 6 from a one-row implementation.
+ */
+const MONDAY = '2026-10-12';
+const SUNDAY = '2026-10-11';
+/** 2026-W41's plan is `plan` itself; this is the week the Monday opens. */
+const w42: WeekPlan = { ...plan, id: 'p42', isoWeek: '2026-W42' };
+
+function mondayInputs(partial: Partial<TodayInputs> = {}): TodayInputs {
+  return inputs({
+    date: MONDAY, plan: w42, yesterdayPlan: plan, log: log({ date: MONDAY }),
+    ...partial,
+  });
 }
 
 describe('buildTodayView', () => {
@@ -204,9 +224,116 @@ describe('buildTodayView', () => {
     const view = buildTodayView(inputs({
       date: '2026-09-30',
       plan: { ...plan, isoWeek: '2026-W40' },
+      yesterdayPlan: { ...plan, isoWeek: '2026-W40' },
       log: log({ date: '2026-09-30' }),
     }));
     expect(view.jokerAvailable).toBe(false);
+  });
+
+  it('offers the excuse on an uncovered yesterday', () => {
+    const view = buildTodayView(mondayInputs());
+    expect(view.yesterday).toBe(SUNDAY);
+    // Nothing logged on the Sunday at all, which is the ordinary shape of a
+    // missed day: no row means nothing covered it.
+    expect(view.yesterdayExcusable).toBe(true);
+  });
+
+  it("judges yesterday against yesterday's week plan, not this week's", () => {
+    // Rule 6. W41 spent its joker on the Thursday; W42, the week this Monday
+    // opens, has not touched its own. An implementation that read one row -
+    // today's - would offer an excuse the week has no joker left to pay for.
+    const view = buildTodayView(mondayInputs({
+      plan: { ...w42, jokerUsedOn: null },
+      yesterdayPlan: { ...plan, jokerUsedOn: '2026-10-08' },
+    }));
+    expect(view.jokerAvailable).toBe(true);
+    expect(view.yesterdayExcusable).toBe(false);
+  });
+
+  it('offers the excuse even when this week has spent its own joker', () => {
+    // Rule 6 the other way, and the mirror of the case above: W42's joker is
+    // gone on the Monday itself, W41's is intact. A one-row implementation
+    // withholds the excuse here, which is the user-visible loss - the Sunday
+    // she missed is gone for good because of a joker spent on a later week.
+    const view = buildTodayView(mondayInputs({
+      plan: { ...w42, jokerUsedOn: MONDAY },
+      yesterdayPlan: { ...plan, jokerUsedOn: null },
+      log: log({ date: MONDAY, jokered: true }),
+      dayLogs: [log({ id: 'l12', date: MONDAY, jokered: true })],
+    }));
+    expect(view.jokerAvailable).toBe(false);
+    expect(view.yesterdayExcusable).toBe(true);
+  });
+
+  it('withholds the excuse on a validated yesterday', () => {
+    // W41's joker is untouched here, so coverage is the only thing that can
+    // refuse this one.
+    const view = buildTodayView(mondayInputs({
+      dayLogs: [log({ id: 'l11', date: SUNDAY, validatedAt: '2026-10-11T21:00:00Z' })],
+    }));
+    expect(view.yesterdayExcusable).toBe(false);
+  });
+
+  it('withholds the excuse on an already jokered yesterday', () => {
+    // Spec 4.4: a jokered day is covered, so it is not offered a second
+    // excuse. W41's jokerUsedOn is deliberately left null, which pins THIS
+    // branch rather than the week-plan one: the coherent pairing, where the
+    // row and the plan both say so, is refused for either reason and so could
+    // not fail against a build that had dropped the coverage check. That
+    // coherent state is what the screen test asserts after a real spend.
+    const view = buildTodayView(mondayInputs({
+      yesterdayPlan: { ...plan, jokerUsedOn: null },
+      dayLogs: [log({ id: 'l11', date: SUNDAY, jokered: true })],
+    }));
+    expect(view.yesterdayExcusable).toBe(false);
+  });
+
+  it('withholds the excuse when yesterday precedes the start date', () => {
+    // The cycle opens on the Monday, so the Sunday before it is not a day she
+    // ever owed anything on - and jokering it would pad the streak with a day
+    // outside the cycle.
+    const view = buildTodayView(mondayInputs({
+      settings: { ...settings, startDate: MONDAY },
+    }));
+    expect(view.yesterdayExcusable).toBe(false);
+  });
+
+  it('does not reach back past yesterday for a day to excuse', () => {
+    // Yesterday is covered and the day BEFORE it is not. An implementation
+    // that offered the most recent uncovered day would name 2026-10-10, which
+    // canUseJoker refuses outright on age (src/domain/streak.test.ts) and
+    // which spec 4.4 calls a retroactive excuse that hollows out the streak.
+    const view = buildTodayView(mondayInputs({
+      dayLogs: [
+        log({ id: 'l10', date: '2026-10-10' }),
+        log({ id: 'l11', date: SUNDAY, validatedAt: '2026-10-11T21:00:00Z' }),
+      ],
+    }));
+    expect(view.yesterday).toBe(SUNDAY);
+    expect(view.yesterdayExcusable).toBe(false);
+  });
+
+  it('repairs the streak when yesterday is excused', () => {
+    // Saturday validated, Sunday missed, Monday validated: the walk back from
+    // today stops at the Sunday, so two earned days count as one.
+    const dayLogs = [
+      log({ id: 'l10', date: '2026-10-10', validatedAt: '2026-10-10T21:00:00Z' }),
+      log({ id: 'l12', date: MONDAY, validatedAt: '2026-10-12T21:00:00Z' }),
+    ];
+    const todayLog = log({ date: MONDAY, validatedAt: '2026-10-12T21:00:00Z' });
+    const before = buildTodayView(mondayInputs({ log: todayLog, dayLogs }));
+    expect(before.streak).toBe(1);
+    // Today is covered, so the only offer left is the one for the Sunday.
+    expect(before.jokerAvailable).toBe(false);
+    expect(before.yesterdayExcusable).toBe(true);
+
+    const after = buildTodayView(mondayInputs({
+      log: todayLog,
+      yesterdayPlan: { ...plan, jokerUsedOn: SUNDAY },
+      dayLogs: [...dayLogs, log({ id: 'l11', date: SUNDAY, jokered: true })],
+    }));
+    expect(after.streak).toBe(3);
+    expect(after.yesterdayExcusable).toBe(false);
   });
 });
 
@@ -505,6 +632,63 @@ describe('useToday', () => {
     expect(result.current?.items.map((i) => i.id))
       .toEqual(['calories', 'no_dinner', 'steps', 'water']);
     expect(result.current?.log).toEqual(blankDayLog('u1', '2026-10-07'));
+  });
+
+  it("reads yesterday's week plan, which is a different row on a Monday", async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    // Midday in Paris on Monday 2026-10-12. Its yesterday, Sunday 2026-10-11,
+    // closes 2026-W41, while the Monday itself opens 2026-W42.
+    vi.setSystemTime(new Date('2026-10-12T10:00:00Z'));
+    await db.settings.put(settings);
+    await db.weekPlans.bulkPut([
+      { ...plan, id: 'p41', isoWeek: '2026-W41', jokerUsedOn: '2026-10-08' },
+      { ...plan, id: 'p42', isoWeek: '2026-W42', jokerUsedOn: null },
+    ]);
+
+    const { result } = renderHook(() => useToday('u1'));
+    await waitFor(() => expect(result.current).toBeDefined());
+
+    expect(result.current?.yesterday).toBe('2026-10-11');
+    // Two rows, two answers: W41 has spent its joker and W42 has not. A hook
+    // that handed the build one plan for both would make these agree.
+    expect(result.current?.jokerAvailable).toBe(true);
+    expect(result.current?.yesterdayExcusable).toBe(false);
+    // Both reads stay read-only, so neither invented a plan nor queued a push.
+    expect(await db.weekPlans.count()).toBe(2);
+    expect(await db.outbox.count()).toBe(0);
+  });
+
+  it("offers the excuse from last week's plan when this week's joker is gone", async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-12T10:00:00Z'));
+    await db.settings.put(settings);
+    await db.weekPlans.bulkPut([
+      { ...plan, id: 'p41', isoWeek: '2026-W41', jokerUsedOn: null },
+      { ...plan, id: 'p42', isoWeek: '2026-W42', jokerUsedOn: '2026-10-12' },
+    ]);
+    await db.dayLogs.put(log({ id: 'l12', date: '2026-10-12', jokered: true }));
+
+    const { result } = renderHook(() => useToday('u1'));
+    await waitFor(() => expect(result.current).toBeDefined());
+
+    expect(result.current?.jokerAvailable).toBe(false);
+    expect(result.current?.yesterdayExcusable).toBe(true);
+  });
+
+  it('invents no plan for yesterday either, on the one weekday that reads two', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-12T10:00:00Z'));
+    await db.settings.put(settings);
+
+    const { result } = renderHook(() => useToday('u1'));
+    // A getOrCreateWeekPlan for the second read would reject inside the
+    // liveQuery context and leave this undefined forever, which is the shape
+    // of the bug that once made this screen unrenderable.
+    await waitFor(() => expect(result.current).toBeDefined());
+
+    expect(result.current?.yesterdayExcusable).toBe(true);
+    expect(await db.weekPlans.count()).toBe(0);
+    expect(await db.outbox.count()).toBe(0);
   });
 
   it('resolves to undefined while no settings row exists', async () => {

@@ -1,16 +1,22 @@
+import type { IsoDate } from '@/domain/types';
 import { Button } from '@/ui/Button';
-import { plural } from '@/ui/format';
+import { longDate, plural } from '@/ui/format';
 import { Pill } from '@/ui/Pill';
 
 export function StreakCard({
-  streak, daysLeft, cycleComplete, jokerAvailable, onUseJoker,
+  streak, daysLeft, cycleComplete, jokerAvailable,
+  yesterday, yesterdayExcusable, onUseJoker, onExcuseYesterday,
 }: {
   streak: number;
   daysLeft: number;
   /** True from goalDate + 1, when there is nothing left to count down to. */
   cycleComplete: boolean;
   jokerAvailable: boolean;
+  /** The day the second button would excuse, named in its own label. */
+  yesterday: IsoDate;
+  yesterdayExcusable: boolean;
   onUseJoker: () => void;
+  onExcuseYesterday: () => void;
 }) {
   return (
     <>
@@ -28,13 +34,31 @@ export function StreakCard({
           <Pill>{cycleComplete ? 'Cycle terminé' : `J\u2212${daysLeft}`}</Pill>
         </span>
       </div>
-      {jokerAvailable && (
+      {(jokerAvailable || yesterdayExcusable) && (
         <div>
+          {/* Held in reserve, not a verdict. The old line - "Un imprevu ? Il
+              te reste ton joker" - showed on EVERY uncovered day, so at 08:00
+              on a day she was going to finish the app had already decided she
+              had failed. */}
           <p className="today__joker">
-            {/* No-break space before the question mark, French typography. */}
-            Un imprévu{'\u00a0'}? Il te reste ton joker de la semaine.
+            Ton joker de la semaine est intact, au cas où.
           </p>
-          <Button variant="quiet" onClick={onUseJoker}>Utiliser mon joker</Button>
+          {/* Each button names the day it spends the joker on. There is one
+              joker per ISO week and spending it on the wrong day cannot be
+              undone, so "Utiliser mon joker" beside an offer for yesterday
+              would be the one ambiguity worth never having. */}
+          <div className="today__jokeracts">
+            {jokerAvailable && (
+              <Button variant="quiet" onClick={onUseJoker}>
+                {'Excuser aujourd\u2019hui'}
+              </Button>
+            )}
+            {yesterdayExcusable && (
+              <Button variant="quiet" onClick={onExcuseYesterday}>
+                {`Excuser ${longDate(yesterday)}`}
+              </Button>
+            )}
+          </div>
         </div>
       )}
     </>
