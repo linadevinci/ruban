@@ -15,6 +15,39 @@
 ## Global Constraints
 
 Plan 1's Global Constraints apply in full. The ones this plan turns on:
+
+**Pre-flight finding: this plan has thirteen `useLiveQuery` uses and no test that renders any of
+them against a database.** Two `fake-indexeddb` imports in the whole file, against five screens
+that each read Dexie reactively, and the screen tests here are pure view-model cases of the
+`reports no average below three weigh-ins` kind. Those are worth having and they cannot catch the
+one failure that matters: in Plan 2 a hook that **could never resolve** shipped past 209 passing
+tests, because every test exercised the pure view model and none rendered the hook. The cause was a
+`getOrCreate*` inside a querier, which Dexie rejects outright, and the screen sat on `undefined`
+forever.
+
+So before any screen task here is dispatched, each one owes a test that renders the component
+against `fake-indexeddb`, seeds **every table its querier reads**, and asserts real content rather
+than the loading state. A defined result is necessary, not sufficient: Plan 2's hook tests seeded
+only two tables and left seven wiring lines free to be wrong, including one that re-ran an earlier
+Critical finding a level up. `src/features/today/Today.test.tsx` and
+`src/features/today/useToday.test.ts` are the shape to copy.
+
+Also verify per screen, since Plan 2 shipped each of these as a defect once:
+
+- **No `getOrCreate*` anywhere a querier can reach it.** Task 4's prose already gets this right for
+  the week planner and states both reasons; the rule is global and the repo functions carry warning
+  docblocks. `getOrCreateWeekPlan` appearing in a *test* fixture is fine, it is the querier path
+  that must stay read-only.
+- **Numeric inputs must reject what is not a number.** `inputMode="numeric"` is a keyboard hint and
+  does nothing against a desktop keyboard or a paste; `Number('abc')` is `NaN`, and a `NaN` written
+  to a target or a weigh-in poisons every comparison that reads it. Good news from the scan: this
+  plan's fields already hold a `draft` and commit on save, so the collapsing-digits bug that hit
+  Plan 2's steps field is **not** copied forward here, and no raw `Number(raw)` appears.
+- **`font-size: 16px` or larger on every text input, placed *after* any `font: inherit`**, which
+  resets it. Fourteen inline input styles in this plan need the check; below 16px iOS zooms the page
+  on focus.
+- **Writes keyed off the date, never off a row id.** A day with no stored row yields a placeholder
+  whose `id` is the empty string.
 - **The escape rule, as sharpened during Plan 2:** escape the characters that look like an ASCII neighbour (U+202F, U+00A0, U+2212, U+2014, U+2019, U+2026, U+00B7); write accented letters literally (`départ`, not an escape), because they are visibly distinct and cannot be silently substituted. Code comments stay ASCII. Plan 2's Global Constraints carry the full statement.
 
 
