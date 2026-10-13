@@ -42,6 +42,34 @@ describe('Stepper', () => {
     expect(onChange).toHaveBeenCalledWith(0);
   });
 
+  it('gives the value a name and a programmatic value', () => {
+    // The count was a bare <span>: a screen reader read out "3" with nothing
+    // to say what 3 was a count of, while the two buttons beside it were
+    // named. The role is what makes aria-valuenow mean anything.
+    render(<Stepper label="Eau" value={3} min={0} max={10} step={1} onChange={() => {}} />);
+    const count = screen.getByRole('spinbutton', { name: 'Eau' });
+    expect(count).toHaveAttribute('aria-valuenow', '3');
+    expect(count).toHaveAttribute('aria-valuemin', '0');
+    expect(count).toHaveAttribute('aria-valuemax', '10');
+  });
+
+  it('can be addressed by a caller\u2019s own label', () => {
+    // The id is why the value is an <output> rather than a <span>: only a
+    // labelable element can be the target of a <label htmlFor>, which is how
+    // the Today screen names this one from its visible "Eau".
+    //
+    // The caller's label text is deliberately NOT the `label` prop: with the
+    // same word in both, this resolves through the value's own aria-label and
+    // passes against a Stepper that drops the id entirely.
+    render(
+      <>
+        <label htmlFor="water-count">Verres</label>
+        <Stepper id="water-count" label="Eau" value={2} min={0} max={10} step={1} onChange={() => {}} />
+      </>,
+    );
+    expect(screen.getByLabelText('Verres')).toHaveAttribute('aria-valuenow', '2');
+  });
+
   it('shows the current value, and updates when it changes', () => {
     // Two distinct values, neither equal to min, max or step. A single
     // assertion at value={3} passes against a hardcoded 3, and against a

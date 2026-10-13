@@ -16,6 +16,36 @@ import { Today } from '@/features/today/Today';
 const reward = vi.hoisted(() => ({ playTick: vi.fn(), playFanfare: vi.fn() }));
 vi.mock('@/ui/reward', () => reward);
 
+/**
+ * A switch that makes every write this screen can make reject, the way
+ * IndexedDB refuses one on a near-full phone. Pass-through while it is off, so
+ * every other case in this file runs against the real repos - and so the
+ * happy-path case can prove the notice is not simply always on screen.
+ *
+ * Only the three writes Today reaches are wrapped: the reads useToday's
+ * querier makes have to keep working, or the screen never renders at all and
+ * the message would be unreachable for the wrong reason.
+ */
+const writes = vi.hoisted(() => ({ fail: false }));
+vi.mock('@/db/repos', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/db/repos')>();
+  const refuse = <F extends (...args: never[]) => Promise<unknown>>(real: F): F => {
+    const pass = real as unknown as (...args: unknown[]) => Promise<unknown>;
+    return ((...args: unknown[]) => (writes.fail
+      ? Promise.reject(new DOMException('quota exceeded', 'QuotaExceededError'))
+      : pass(...args))) as unknown as F;
+  };
+  return {
+    ...actual,
+    updateDayLog: refuse(actual.updateDayLog),
+    spendJoker: refuse(actual.spendJoker),
+    stampDayLog: refuse(actual.stampDayLog),
+  };
+});
+
+/** The first line of the refused-write notice, as Today renders it. */
+const OOPS = /pas réussi à enregistrer/;
+
 /** A Tuesday. Under the default week plan it is a run day and not a no-dinner evening. */
 const TUESDAY = '2026-10-06';
 /** Midday in Paris on that Tuesday. */
@@ -31,6 +61,7 @@ function log(partial: Partial<DayLog> = {}): DayLog {
 }
 
 beforeEach(async () => {
+  writes.fail = false;
   reward.playTick.mockClear();
   reward.playFanfare.mockClear();
   // Date only, so Testing Library's waitFor and userEvent keep real timers -
@@ -416,5 +447,140 @@ describe('Today', () => {
     const row = await db.dayLogs.toCollection().first();
     expect(row?.date).toBe('2026-10-07');
     expect(row?.ticks.calories).toBe(true);
+  });
+  it('says so, and keeps saying so, when a tick cannot be saved', async () => {
+    render(<Today userId="u1" />);
+    const box = await screen.findByRole('checkbox', { name: 'Calories respectées' });
+    // Nothing on screen yet: the notice has to be caused by the failure, not
+    // rendered unconditionally.
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+
+    writes.fail = true;
+    await userEvent.click(box);
+
+    // In the UI, in French, and announced - until this landed a refused write
+    // left no trace at all outside a console she cannot open: the tick simply
+    // sprang back.
+    const notice = await screen.findByRole('alert');
+    expect(notice).toHaveTextContent(OOPS);
+    // And it does not read as "your day is gone", the way the shell's
+    // open-failure panel does not either.
+    expect(notice).toHaveTextContent(/le reste de ta journée est intact/);
+
+    // The tick really did not take, which is what the notice is there to
+    // explain.
+    expect(await db.dayLogs.count()).toBe(0);
+    expect(box).not.toBeChecked();
+
+    // Dismissible, and dismissed by her rather than by the next render: three
+    // more renders happen under it here.
+    await userEvent.click(screen.getByRole('button', { name: 'Fermer' }));
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('says so when the steps field, the water stepper or the joker cannot be saved', async () => {
+    // The other three write paths. Each one used to drop its rejection: two as
+    // unhandled promises, one under a bare `void`.
+    render(<Today userId="u1" />);
+    const field = await screen.findByRole('textbox', { name: 'Pas' });
+    writes.fail = true;
+
+    fireEvent.change(field, { target: { value: '8200' } });
+    expect(await screen.findByRole('alert')).toHaveTextContent(OOPS);
+    await userEvent.click(screen.getByRole('button', { name: 'Fermer' }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Augmenter Eau' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(OOPS);
+    await userEvent.click(screen.getByRole('button', { name: 'Fermer' }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Utiliser mon joker' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(OOPS);
+
+    // None of the three landed.
+    expect(await db.dayLogs.count()).toBe(0);
+    expect(await db.weekPlans.count()).toBe(0);
+  });
+
+  it('says so when the day cannot be stamped as validated', async () => {
+    // The fifth write, and the one with the most to lose: the stamping effect
+    // is what records a finished day AS finished. A day that is already
+    // complete when the screen opens, so the effect is the only write in
+    // play - refusing the tick first would stop the day completing and never
+    // reach the stamp at all.
+    await db.dayLogs.put(log({
+      steps: 8200, waterGlasses: 6, ticks: { calories: true, course: true },
+    }));
+    writes.fail = true;
+    render(<Today userId="u1" />);
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(OOPS);
+    expect((await db.dayLogs.get('l1'))?.validatedAt).toBeNull();
+    // The screen still shows the day as done - the live evaluation says so
+    // even though the stamp was refused - which is exactly why the refusal
+    // needs saying out loud.
+    expect(screen.getByText('Journée validée.')).toBeInTheDocument();
+  });
+
+  it('says nothing at all when the writes land', async () => {
+    // The control. A notice rendered unconditionally would pass every case
+    // above and shout at her all day.
+    await db.dayLogs.put(log({ steps: 8200, waterGlasses: 5, ticks: { calories: true } }));
+    render(<Today userId="u1" />);
+
+    await userEvent.click(await screen.findByRole('checkbox', { name: 'Course' }));
+    await waitFor(async () => {
+      expect((await db.dayLogs.get('l1'))?.ticks.course).toBe(true);
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Augmenter Eau' }));
+    await waitFor(async () => {
+      expect((await db.dayLogs.get('l1'))?.waterGlasses).toBe(6);
+    });
+    // Including after the stamping effect has run, which is a write of its own.
+    await waitFor(async () => {
+      expect(typeof (await db.dayLogs.get('l1'))?.validatedAt).toBe('string');
+    });
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.queryByText(OOPS)).not.toBeInTheDocument();
+  });
+
+  it('counts down to the goal date, and stops counting past it', async () => {
+    // The goal date itself: the last day there is anything to count down to.
+    vi.setSystemTime(new Date('2026-11-12T10:00:00Z'));
+    render(<Today userId="u1" />);
+    expect((await screen.findByTestId('countdown')).textContent).toBe('J\u22120');
+  });
+
+  it('does not render a negative countdown the day after the goal', async () => {
+    // One day past the goal, daysUntil is -1, and a minus sign in front of it
+    // rendered "J--1". Spec 4.9's cycle summary belongs to Plan 3; what this
+    // pins is that the pill stops counting rather than counting backwards.
+    vi.setSystemTime(new Date('2026-11-13T10:00:00Z'));
+    render(<Today userId="u1" />);
+    const pill = await screen.findByTestId('countdown');
+    expect(pill.textContent).toBe('Cycle terminé');
+    expect(pill.textContent).not.toContain('\u2212');
+    expect(pill.textContent).not.toContain('-');
+  });
+
+  it('names the water count, and not just its two buttons', async () => {
+    // "Eau" was a plain <span> beside an unlabelled <span> holding the count,
+    // so a screen reader read out a bare number with no name on it.
+    await db.dayLogs.put(log({ waterGlasses: 4 }));
+    render(<Today userId="u1" />);
+
+    const count = await screen.findByRole('spinbutton', { name: 'Eau' });
+    expect(count).toHaveAttribute('aria-valuenow', '4');
+    // And "Eau" is a real <label> pointing at it, which is the standard the
+    // steps row above already set with its <label htmlFor> plus aria-label.
+    // Asserted through the `for`/`id` pair rather than through
+    // getByLabelText('Eau'), which resolves through the value's own aria-label
+    // and would pass against the <span> this used to be.
+    const name = screen.getByText('Eau');
+    expect(name.tagName).toBe('LABEL');
+    expect(count.id).not.toBe('');
+    expect(name).toHaveAttribute('for', count.id);
+    // The button names tests rely on still work.
+    expect(screen.getByRole('button', { name: 'Augmenter Eau' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Diminuer Eau' })).toBeInTheDocument();
   });
 });

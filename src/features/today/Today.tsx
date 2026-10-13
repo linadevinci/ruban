@@ -5,6 +5,7 @@ import { Checklist } from '@/features/today/Checklist';
 import { StreakCard } from '@/features/today/StreakCard';
 import { syncStamps } from '@/features/today/stamps';
 import { useToday } from '@/features/today/useToday';
+import { Button } from '@/ui/Button';
 import { Card } from '@/ui/Card';
 import { Confetti } from '@/ui/Confetti';
 import { kcal, longDate } from '@/ui/format';
@@ -26,6 +27,24 @@ const WATER_MAX = 20;
  * second grouper would be a second set of rules to keep in step.
  */
 const grouped = kcal;
+
+/**
+ * What a refused write says. IndexedDB can refuse one - a quota refusal on a
+ * near-full phone is the ordinary case - and until this landed a refusal left
+ * no trace anywhere she could see it: the tick simply did not take, the step
+ * count silently reverted, and the only record was a console she cannot open.
+ * The shell goes to real trouble to say "Rien n'est perdu" when the database
+ * will not OPEN, so a write that fails cannot stay mute.
+ *
+ * Two things the copy has to do. Say that THIS change did not land, so a tick
+ * that sprang back is explained rather than mysterious; and not read as "your
+ * day is gone", because nothing already stored has moved.
+ */
+const WRITE_FAILED = {
+  title: 'Je n\u2019ai pas réussi à enregistrer ça.',
+  line: 'Ta dernière modification n\u2019a pas été prise, mais le reste de ta journée est intact\u00a0: réessaie. Si ça insiste, il manque sans doute de la place sur ton téléphone.',
+  dismiss: 'Fermer',
+};
 
 type CountEntry =
   | { kind: 'clear' }
@@ -52,6 +71,14 @@ export function Today({ userId }: { userId: string }) {
   const view = useToday(userId);
   const [celebrating, setCelebrating] = useState(false);
   const celebrationTimer = useRef(0);
+  /**
+   * Set by any write that rejects, and cleared only when she dismisses it.
+   * Deliberately not cleared by the next write that succeeds: a later write
+   * landing says nothing about the one that did not, and clearing the notice
+   * under her would take away the only explanation of the tick that sprang
+   * back.
+   */
+  const [writeFailed, setWriteFailed] = useState(false);
 
   /**
    * What is being typed into the step field, while it is being typed, and null
@@ -94,18 +121,34 @@ export function Today({ userId }: { userId: string }) {
     // an item unticked in the moment between the call and its answer - would
     // mean the celebration never shows for that day again. The leak actually
     // worth guarding is the timeout, which the unmount effect above clears.
+    //
+    // Caught like every other write on this screen: syncStamps stamps
+    // validatedAt and bonusFiredAt, so a refusal here means the day she just
+    // finished is not recorded as finished, which is the last thing to let
+    // pass in silence.
     void syncStamps(userId, { date, validated }).then((result) => {
       if (!result.fireBonus) return;
       playFanfare(sound);
       setCelebrating(true);
       window.clearTimeout(celebrationTimer.current);
       celebrationTimer.current = window.setTimeout(() => setCelebrating(false), CELEBRATION_MS);
-    });
+    }).catch(() => { setWriteFailed(true); });
   }, [userId, date, validated, bonusFiredAt, sound]);
 
   if (!view) return <p>{'Un instant\u2026'}</p>;
 
-  const toggle = async (id: TickableItemId, next: boolean) => {
+  /**
+   * Every write this screen makes goes through here. Two of them used to be
+   * `async` functions handed to a prop typed `() => void`, so their rejections
+   * were not merely unreported - they floated as unhandled promise
+   * rejections. The others were fired off with a bare `void`, which says "I
+   * know this is a promise" and then drops its failure just as completely.
+   */
+  const report = (write: Promise<unknown>) => {
+    void write.catch(() => { setWriteFailed(true); });
+  };
+
+  const toggle = (id: TickableItemId, next: boolean) => {
     playTick(sound);
     // Keyed off the date, never off view.log.id, which is the empty string on a
     // day with no stored row yet. And flipped from the STORED tick rather than
@@ -114,15 +157,15 @@ export function Today({ userId }: { userId: string }) {
     // the untick was lost. `next` is still the seed for the first tap, when no
     // tick is stored and the box may be showing something else as satisfied -
     // a logged run standing in for an unticked `course`.
-    await updateDayLog(userId, view.date, (row) => ({
+    report(updateDayLog(userId, view.date, (row) => ({
       ticks: { [id]: row.ticks[id] === undefined ? next : !row.ticks[id] },
-    }));
+    })));
   };
 
-  const useJoker = async () => {
+  const useJoker = () => {
     // One repo call, so the day log and the week plan move in one transaction:
     // the invariant is one joker per ISO week, and it lives across both rows.
-    await spendJoker(userId, view.date);
+    report(spendJoker(userId, view.date));
   };
 
   // The draft while she is typing into the field, the stored count otherwise.
@@ -139,9 +182,9 @@ export function Today({ userId }: { userId: string }) {
     setStepsDraft({ date: view.date, text: raw });
     // An absolute value, not a value computed from the stored one, so a plain
     // patch is right here: the draft above is what the digits accumulate in.
-    void updateDayLog(userId, view.date, {
+    report(updateDayLog(userId, view.date, {
       steps: entry.kind === 'clear' ? null : entry.value,
-    });
+    }));
   };
 
   return (
@@ -151,12 +194,29 @@ export function Today({ userId }: { userId: string }) {
       <StreakCard
         streak={view.streak}
         daysLeft={view.daysLeft}
+        cycleComplete={view.cycleComplete}
         jokerAvailable={view.jokerAvailable}
         onUseJoker={useJoker}
       />
 
       <Card laced>
         <h1 className="today__date">{longDate(view.date)}</h1>
+
+        {/* Above the checklist and inside the same card, so it is the first
+            thing under the date and needs no scrolling to be seen - a notice
+            about a tick that did not take is worth nothing below the fold.
+            role="alert" is what makes a screen reader say it at all, the way
+            Onboarding's validation error does. */}
+        {writeFailed && (
+          <div className="today__oops" role="alert">
+            <p className="today__oopstitle">{WRITE_FAILED.title}</p>
+            <p className="today__oopsline">{WRITE_FAILED.line}</p>
+            <Button variant="quiet" onClick={() => setWriteFailed(false)}>
+              {WRITE_FAILED.dismiss}
+            </Button>
+          </div>
+        )}
+
         <Checklist items={view.items} onToggle={toggle} />
 
         <div className="today__amount">
@@ -183,12 +243,16 @@ export function Today({ userId }: { userId: string }) {
 
         <div className="today__amount">
           <span className="today__amountrow">
-            <span className="today__amountname">Eau</span>
+            {/* A <label htmlFor>, matching the steps row above: as a plain
+                <span> the count beside it had no name at all, and a screen
+                reader read out a bare number. */}
+            <label className="today__amountname" htmlFor="today-water">Eau</label>
             <span className="today__amounthint">
               {`\u00b7 objectif ${grouped(view.settings.waterTarget)}`}
             </span>
           </span>
           <Stepper
+            id="today-water"
             label="Eau"
             value={view.log.waterGlasses ?? WATER_MIN}
             min={WATER_MIN}
@@ -203,12 +267,12 @@ export function Today({ userId }: { userId: string }) {
               // Clamped in here as well, because the stepper's own min/max
               // only guard the value it was rendered with.
               const move = next - (view.log.waterGlasses ?? WATER_MIN);
-              void updateDayLog(userId, view.date, (row) => ({
+              report(updateDayLog(userId, view.date, (row) => ({
                 waterGlasses: Math.min(
                   WATER_MAX,
                   Math.max(WATER_MIN, (row.waterGlasses ?? WATER_MIN) + move),
                 ),
-              }));
+              })));
             }}
           />
         </div>

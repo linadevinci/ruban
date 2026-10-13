@@ -3,10 +3,12 @@ import { plural } from '@/ui/format';
 import { Pill } from '@/ui/Pill';
 
 export function StreakCard({
-  streak, daysLeft, jokerAvailable, onUseJoker,
+  streak, daysLeft, cycleComplete, jokerAvailable, onUseJoker,
 }: {
   streak: number;
   daysLeft: number;
+  /** True from goalDate + 1, when there is nothing left to count down to. */
+  cycleComplete: boolean;
   jokerAvailable: boolean;
   onUseJoker: () => void;
 }) {
@@ -18,7 +20,12 @@ export function StreakCard({
           <span className="label">{plural(streak, 'jour', 'jours')} d'affilée</span>
         </div>
         <span data-testid="countdown">
-          <Pill>{`J\u2212${daysLeft}`}</Pill>
+          {/* Past the goal date daysUntil goes negative, and the minus in
+              front of it made the pill read "J--1" - a countdown counting up,
+              in the wrong direction, with two minus signs. Spec 4.9 gives the
+              cycle summary and the new goal to Plan 3; until then the pill
+              says the cycle is over rather than rendering a negative day. */}
+          <Pill>{cycleComplete ? 'Cycle terminé' : `J\u2212${daysLeft}`}</Pill>
         </span>
       </div>
       {jokerAvailable && (

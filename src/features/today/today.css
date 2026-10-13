@@ -23,6 +23,23 @@
   font: inherit;
   font-size: 16px;
 }
+/* The refused-write notice. Inset rather than tinted with the rose, which is
+   a fill and never carries meaning on its own, and bordered so it reads as a
+   panel rather than as another line of the list. */
+.today__oops {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  background: var(--inset);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px;
+  margin: 10px 0 2px;
+}
+.today__oopstitle { margin: 0; font-weight: 500; color: var(--cerise); }
+.today__oopsline { margin: 0; color: var(--ink-soft); font-size: var(--step--1); }
+
 .today__week { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
 .today__weeknum { font-family: var(--font-display); font-size: var(--step-2); }
 .today__joker { margin: 0; color: var(--ink-soft); }
