@@ -16,11 +16,11 @@ describe('rollingAverage', () => {
   });
 
   it('excludes weigh-ins older than the seven-day window', () => {
-    // "Trailing seven calendar days inclusive" means {onDate-6 … onDate}, so a
+    // "Trailing seven calendar days inclusive" means {onDate-6 ... onDate}, so a
     // weigh-in exactly 7 days back is OUTSIDE the window, not on its edge.
     const data = [
-      w('2026-09-29', 70),   // 7 days before — outside
-      w('2026-09-30', 63),   // 6 days before — inside
+      w('2026-09-29', 70),   // 7 days before - outside
+      w('2026-09-30', 63),   // 6 days before - inside
       w('2026-10-05', 62.5),
       w('2026-10-06', 62),
     ];
@@ -47,8 +47,8 @@ describe('rollingAverage', () => {
     // 7-days-back weigh-in INSIDE the window. Measuring from UTC noon keeps
     // it out, which is what makes the boundary exact.
     const data = [
-      w('2026-03-25', 70),     // exactly 7 days back — must stay outside
-      w('2026-03-26', 63),     // 6 days back — inside
+      w('2026-03-25', 70),     // exactly 7 days back - must stay outside
+      w('2026-03-26', 63),     // 6 days back - inside
       w('2026-03-31', 62.5),
       w('2026-04-01', 62),
     ];

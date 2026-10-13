@@ -29,7 +29,7 @@ export function isIsoDate(d: string): boolean {
 
 /**
  * Only for `Date`s produced by `parseIsoDate`, which sit at UTC noon. For any
- * other instant the UTC day can differ from the local one — use `todayIn` to
+ * other instant the UTC day can differ from the local one - use `todayIn` to
  * get today's date from an instant.
  */
 export function formatUtcNoonDate(dt: Date): IsoDate {
@@ -58,7 +58,7 @@ export function isoWeekOf(d: IsoDate): IsoWeek {
   const days = (dt.getTime() - jan1) / DAY_MS;
   // ceil((days + 1) / 7), NOT round(days / 7) + 1. Let k be the day-of-year
   // index of the ISO year's first Thursday; the Thursday of week N sits at
-  // k + 7(N-1), so round(days / 7) + 1 yields N + round(k / 7) — correct only
+  // k + 7(N-1), so round(days / 7) + 1 yields N + round(k / 7) - correct only
   // while k <= 3. For k in {4, 5, 6}, i.e. whenever 1 January is a Friday,
   // Saturday or Sunday (three years in seven), every week in that year came
   // out one too high and isoWeekOf stopped inverting datesOfIsoWeek.

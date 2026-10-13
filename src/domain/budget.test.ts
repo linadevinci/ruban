@@ -108,11 +108,11 @@ describe('dayCalorieTotal / weekCalorieTotal', () => {
   it('sums a week and ignores the day on either side of it', () => {
     // 2026-W41 runs Monday 5 to Sunday 11 October.
     const entries = [
-      kcal('2026-10-04', 1000), // Sunday of W40 — one day before
+      kcal('2026-10-04', 1000), // Sunday of W40 - one day before
       kcal('2026-10-05', 400),
       kcal('2026-10-08', 600),
       kcal('2026-10-11', 500),
-      kcal('2026-10-12', 1000), // Monday of W42 — one day after
+      kcal('2026-10-12', 1000), // Monday of W42 - one day after
     ];
     expect(weekCalorieTotal(entries, '2026-W41')).toBe(1500);
   });

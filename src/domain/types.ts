@@ -2,7 +2,7 @@
 export type IsoDate = string;
 /** An ISO week key, "2026-W41". */
 export type IsoWeek = string;
-/** ISO weekday: Monday = 1 … Sunday = 7. */
+/** ISO weekday: Monday = 1 ... Sunday = 7. */
 export type Weekday = 1 | 2 | 3 | 4 | 5 | 6 | 7;
 
 export type ChecklistItemId = 'course' | 'calories' | 'no_dinner' | 'steps' | 'water';
@@ -21,7 +21,7 @@ export interface SyncedRow {
 
 /**
  * Per-user singleton keyed by userId. Deliberately does not extend SyncedRow because the user id
- * is the primary key and settings are never tombstoned—deleting settings means deleting the account,
+ * is the primary key and settings are never tombstoned - deleting settings means deleting the account,
  * which the app does not offer. Adding an id field would break the primary key in both Dexie and
  * Postgres, so Settings must not have id and deletedAt fields.
  */
@@ -86,7 +86,7 @@ export interface WeekPlan extends SyncedRow {
 /**
  * A closed goal period. Written once when a cycle ends, because starting a new
  * goal overwrites settings.startDate and would otherwise erase the old one's
- * boundaries. The summary itself stays derived — only the boundaries are stored.
+ * boundaries. The summary itself stays derived - only the boundaries are stored.
  */
 export interface Cycle extends SyncedRow {
   startDate: IsoDate;

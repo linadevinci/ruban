@@ -9,7 +9,7 @@ export interface WeighIn {
 /**
  * Mean of the weigh-ins in the trailing seven calendar days, inclusive of
  * `onDate`. Returns null below MIN_WEIGH_INS_FOR_AVERAGE, so the UI can say
- * "pas encore assez de pesées" rather than draw a misleading line.
+ * "pas encore assez de pesees" rather than draw a misleading line.
  */
 export function rollingAverage(weighIns: WeighIn[], onDate: IsoDate): number | null {
   const window = weighIns.filter((entry) => {
