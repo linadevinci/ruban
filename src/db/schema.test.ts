@@ -108,7 +108,7 @@ describe('enqueue', () => {
     const payload = row?.payload as { id?: string; deletedAt?: string | null } | undefined;
     expect(payload?.id).toBe('b');
     expect(payload?.deletedAt).toBe(deletedAt);
-    expect(payload?.deletedAt).not.toBeNull();
+    expect(typeof payload?.deletedAt).toBe('string');
   });
 });
 

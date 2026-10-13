@@ -62,7 +62,9 @@ describe('softDelete', () => {
     const run = await saveRun('u1', { date: '2026-10-06', distanceKm: 5, durationS: 1500, note: null });
     await softDelete('runs', run.id);
     expect(await db.runs.get(run.id)).toBeDefined();
-    expect((await db.runs.get(run.id))?.deletedAt).not.toBeNull();
+    // typeof, not not.toBeNull(): `?.` on a row a hard delete removed yields
+    // undefined, and expect(undefined).not.toBeNull() passes.
+    expect(typeof (await db.runs.get(run.id))?.deletedAt).toBe('string');
     expect(await listRuns('u1')).toHaveLength(0);
   });
 
@@ -332,7 +334,13 @@ describe('softDelete beyond runs', () => {
     const weight = await saveWeight('u1', '2026-10-06', 62.4);
     await db.outbox.clear();
     await softDelete('weights', weight.id);
-    expect((await db.weights.get(weight.id))?.deletedAt).not.toBeNull();
+    // Spec 5: nothing is ever hard-deleted, because a hard delete racing a
+    // pending sync resurrects the row. The row has to still BE there, so this
+    // asserts the type rather than `?.deletedAt` not being null - which is
+    // undefined on a removed row, and passes.
+    const stored = await db.weights.get(weight.id);
+    expect(stored).toBeDefined();
+    expect(typeof stored?.deletedAt).toBe('string');
     expect(await listWeights('u1')).toHaveLength(0);
     expect(await db.outbox.count()).toBe(1);
     expect((await db.outbox.orderBy('seq').last())?.op).toBe('delete');
@@ -342,7 +350,9 @@ describe('softDelete beyond runs', () => {
     const entry = await saveCalorieEntry('u1', '2026-10-06', 420, 'dejeuner');
     await db.outbox.clear();
     await softDelete('calorieEntries', entry.id);
-    expect((await db.calorieEntries.get(entry.id))?.deletedAt).not.toBeNull();
+    const stored = await db.calorieEntries.get(entry.id);
+    expect(stored).toBeDefined();
+    expect(typeof stored?.deletedAt).toBe('string');
     expect(await listCalorieEntries('u1')).toHaveLength(0);
     expect(await db.outbox.count()).toBe(1);
   });
