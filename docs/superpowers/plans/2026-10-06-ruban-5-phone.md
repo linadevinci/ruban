@@ -15,6 +15,22 @@
 ## Global Constraints
 
 Plan 1's Global Constraints apply in full. Added here:
+- **The escape rule, as sharpened during Plan 2:** escape the characters that look like an ASCII neighbour (U+202F, U+00A0, U+2212, U+2014, U+2019, U+2026, U+00B7); write accented letters literally (`départ`, not an escape), because they are visibly distinct and cannot be silently substituted. Code comments stay ASCII. Plan 2's Global Constraints carry the full statement.
+
+
+**Pre-flight, before any task here is dispatched: this plan's code blocks contain literal
+confusable characters and they must become `\u` escapes.** A scan counted 17 such lines,
+listed at the end of this paragraph. Most are the French right single quote U+2019 in UI strings
+(`l’écran`, `c’est`), which renders identically to an ASCII apostrophe and is one careless edit
+away from becoming one. **This cannot be done with a bulk search and replace**, because the right
+fix depends on context: inside a string or template literal the escape works on its own, but in
+JSX *text* it does not — there it must be wrapped in braces as an expression, and a blind
+rewrite would emit a literal backslash-u into the rendered page. Em dashes and ellipses inside
+code *comments* take plain ASCII rather than an escape, since comments stay ASCII and an escape
+in a comment just reads as noise. Work through these by hand at pre-flight.
+
+Lines: 310, 314, 371, 372, 373, 379, 380, 384, 385, 853, 985, 1081, 1082, 1099, 1100, 1116, 1140
+
 
 - **Hourly polling, not a scheduled time.** GitHub Actions crons are UTC-only with no DST awareness, so a fixed time silently shifts by an hour on **25 October 2026**. The endpoint does the timezone thinking.
 - **At-most-once delivery.** `sent_reminders` is claimed *before* the push is sent, unique on `(userId, date, kind)`.
@@ -48,9 +64,12 @@ Plan 1's Global Constraints apply in full. Added here:
 - Create: `public/logo.svg`
 - Modify: `vite.config.ts`, `index.html`
 
+`vite-plugin-pwa` 2.x declares `vite ^8`, `workbox-build ^7.4.1`, `workbox-window ^7.4.1` and `@vite-pwa/assets-generator` as peers — verified compatible with this project's Vite 8, and the two workbox peers are why they are installed explicitly below.
+
 ```bash
 npm install -D vite-plugin-pwa @vite-pwa/assets-generator
 npm install workbox-precaching workbox-routing workbox-strategies
+npm install -D workbox-build workbox-window
 ```
 
 **Interfaces:**
@@ -63,7 +82,7 @@ npm install workbox-precaching workbox-routing workbox-strategies
 ```svg
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
   <rect width="512" height="512" fill="#F7E3E6"/>
-  <g transform="translate(256 256) scale(14) translate(-12 -12)" fill="#C2567A">
+  <g transform="translate(256 256) scale(14) translate(-12 -12)" fill="#A64264">
     <path d="M12 12c-1.6-2.6-4-4.2-6.2-3.6C3.9 8.9 3 10.4 3 12s.9 3.1 2.8 3.6C8 16.2 10.4 14.6 12 12z"/>
     <path d="M12 12c1.6-2.6 4-4.2 6.2-3.6C20.1 8.9 21 10.4 21 12s-.9 3.1-2.8 3.6C16 16.2 13.6 14.6 12 12z"/>
     <circle cx="12" cy="12" r="1.9"/>
@@ -148,12 +167,12 @@ git commit -m "feat: add PWA manifest and the bow icon set"
 
 **Files:**
 - Create: `src/sw.ts`
-- Modify: `src/main.tsx` (register), `tsconfig.json` (WebWorker lib)
+- Modify: `src/main.tsx` (register)
 
 **Interfaces:**
 - Produces: a service worker that precaches the shell, serves SPA navigations from cache, never caches `/api/*`, and handles `push` and `notificationclick`.
 
-Add to `tsconfig.json` `compilerOptions.lib`: `"WebWorker"` alongside the existing entries.
+**Do not add `"WebWorker"` to `compilerOptions.lib`.** It would have to go in `tsconfig.app.json` (the root tsconfig has no `compilerOptions`), and loading `DOM` and `WebWorker` together produces conflicting global declarations. The `/// <reference lib="webworker" />` at the top of `sw.ts`, plus its local `declare const self`, scopes the worker types to that one file — which is why the file is written that way.
 
 - [ ] **Step 1: Write the worker**
 
@@ -242,7 +261,7 @@ import { registerSW } from 'virtual:pwa-register';
 registerSW({ immediate: true });
 ```
 
-If TypeScript does not know `virtual:pwa-register`, add `"vite-plugin-pwa/client"` to `compilerOptions.types` in `tsconfig.json`.
+If TypeScript does not know `virtual:pwa-register`, **append** `"vite-plugin-pwa/client"` to `compilerOptions.types` in `tsconfig.app.json` — append, never replace: the array already holds `"vite/client"`, and dropping it breaks every `import.meta.env` reference.
 
 - [ ] **Step 3: Verify offline launch**
 
@@ -589,7 +608,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
 - [ ] **Step 5: Run the tests and commit**
 
-Run: `npm test -- pwa/push && npx tsc --noEmit`
+Run: `npm test -- pwa/push && npx tsc -b`
 Expected: PASS, no type errors.
 
 ```bash
@@ -945,7 +964,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
 - [ ] **Step 2: Type-check**
 
-Run: `npx tsc --noEmit`
+Run: `npx tsc -b`
 Expected: no errors.
 
 - [ ] **Step 3: Verify the guard rejects an unsigned call**
@@ -1148,7 +1167,7 @@ In `src/features/settings/Settings.tsx`, add `import { Notifications } from '@/f
 
 - [ ] **Step 3: Run the full suite**
 
-Run: `npm test && npx tsc --noEmit && npm run build`
+Run: `npm test && npx tsc -b && npm run build`
 Expected: all PASS, clean build.
 
 - [ ] **Step 4: Commit**
@@ -1204,7 +1223,7 @@ git commit -m "docs: record on-device PWA and push verification"
 
 ## Plan 5 Done When
 
-- `npm test`, `npx tsc --noEmit` and `npm run build` are all clean.
+- `npm test`, `npx tsc -b` and `npm run build` are all clean.
 - The installed app launches and works with no network.
 - `/api/*` is never served from cache: a sync attempt while offline fails rather than returning stale data.
 - `/api/cron/reminders` returns 401 without the secret header.

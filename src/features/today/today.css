@@ -1,0 +1,51 @@
+.today { display: flex; flex-direction: column; gap: 16px; }
+.today__head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.today__date { font-family: var(--font-display); font-size: var(--step-2); margin: 0; }
+.today__streak { display: flex; align-items: baseline; gap: 10px; }
+.today__streaknum { font-family: var(--font-display); font-size: var(--step-3); font-weight: 600; line-height: 1; }
+.today__items { display: flex; flex-direction: column; }
+.today__items > * + * { border-top: 1px solid var(--line); }
+.today__amount { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 11px 2px; }
+.today__amount + .today__amount { border-top: 1px solid var(--line); }
+.today__amountrow { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
+.today__amountname { font-weight: 500; }
+.today__amounthint { color: var(--ink-soft); font-size: var(--step--1); }
+.today__steps {
+  width: 6ch;
+  text-align: right;
+  color: var(--ink);
+  background: var(--inset);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 6px 8px;
+  /* font-size AFTER font, which resets it: a text input under 16px makes iOS
+     Safari zoom the page on focus, and the layout jumps on every tap. */
+  font: inherit;
+  font-size: 16px;
+}
+/* The refused-write notice. Inset rather than tinted with the rose, which is
+   a fill and never carries meaning on its own, and bordered so it reads as a
+   panel rather than as another line of the list. */
+.today__oops {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  background: var(--inset);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px;
+  margin: 10px 0 2px;
+}
+.today__oopstitle { margin: 0; font-weight: 500; color: var(--cerise); }
+.today__oopsline { margin: 0; color: var(--ink-soft); font-size: var(--step--1); }
+
+.today__week { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.today__weeknum { font-family: var(--font-display); font-size: var(--step-2); }
+.today__joker { margin: 0; color: var(--ink-soft); }
+/* Side by side while both labels fit, wrapped onto their own rows on a narrow
+   phone. The 8px gap is the point: .btn is already 44px tall, and two offers
+   that spend the same unrecoverable joker must not sit edge to edge where a
+   thumb could take the wrong one. */
+.today__jokeracts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.today__done { font-family: var(--font-hand); font-size: var(--step-2); color: var(--cerise); margin: 0; }

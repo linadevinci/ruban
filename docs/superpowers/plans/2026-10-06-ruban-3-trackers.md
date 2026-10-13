@@ -16,6 +16,55 @@
 
 Plan 1's Global Constraints apply in full. The ones this plan turns on:
 
+**Pre-flight finding: this plan has thirteen `useLiveQuery` uses and no test that renders any of
+them against a database.** Two `fake-indexeddb` imports in the whole file, against five screens
+that each read Dexie reactively, and the screen tests here are pure view-model cases of the
+`reports no average below three weigh-ins` kind. Those are worth having and they cannot catch the
+one failure that matters: in Plan 2 a hook that **could never resolve** shipped past 209 passing
+tests, because every test exercised the pure view model and none rendered the hook. The cause was a
+`getOrCreate*` inside a querier, which Dexie rejects outright, and the screen sat on `undefined`
+forever.
+
+So before any screen task here is dispatched, each one owes a test that renders the component
+against `fake-indexeddb`, seeds **every table its querier reads**, and asserts real content rather
+than the loading state. A defined result is necessary, not sufficient: Plan 2's hook tests seeded
+only two tables and left seven wiring lines free to be wrong, including one that re-ran an earlier
+Critical finding a level up. `src/features/today/Today.test.tsx` and
+`src/features/today/useToday.test.ts` are the shape to copy.
+
+Also verify per screen, since Plan 2 shipped each of these as a defect once:
+
+- **No `getOrCreate*` anywhere a querier can reach it.** Task 4's prose already gets this right for
+  the week planner and states both reasons; the rule is global and the repo functions carry warning
+  docblocks. `getOrCreateWeekPlan` appearing in a *test* fixture is fine, it is the querier path
+  that must stay read-only.
+- **Numeric inputs must reject what is not a number.** `inputMode="numeric"` is a keyboard hint and
+  does nothing against a desktop keyboard or a paste; `Number('abc')` is `NaN`, and a `NaN` written
+  to a target or a weigh-in poisons every comparison that reads it. Good news from the scan: this
+  plan's fields already hold a `draft` and commit on save, so the collapsing-digits bug that hit
+  Plan 2's steps field is **not** copied forward here, and no raw `Number(raw)` appears.
+- **`font-size: 16px` or larger on every text input, placed *after* any `font: inherit`**, which
+  resets it. Fourteen inline input styles in this plan need the check; below 16px iOS zooms the page
+  on focus.
+- **Writes keyed off the date, never off a row id.** A day with no stored row yields a placeholder
+  whose `id` is the empty string.
+- **The escape rule, as sharpened during Plan 2:** escape the characters that look like an ASCII neighbour (U+202F, U+00A0, U+2212, U+2014, U+2019, U+2026, U+00B7); write accented letters literally (`départ`, not an escape), because they are visibly distinct and cannot be silently substituted. Code comments stay ASCII. Plan 2's Global Constraints carry the full statement.
+
+
+**Pre-flight, before any task here is dispatched: this plan's code blocks contain literal
+confusable characters and they must become `\u` escapes.** A scan counted 17 such lines,
+listed at the end of this paragraph. Most are the French right single quote U+2019 in UI strings
+(`l’écran`, `c’est`), which renders identically to an ASCII apostrophe and is one careless edit
+away from becoming one. **This cannot be done with a bulk search and replace**, because the right
+fix depends on context: inside a string or template literal the escape works on its own, but in
+JSX *text* it does not — there it must be wrapped in braces as an expression, and a blind
+rewrite would emit a literal backslash-u into the rendered page. Em dashes and ellipses inside
+code *comments* take plain ASCII rather than an escape, since comments stay ASCII and an escape
+in a comment just reads as noise. Work through these by hand at pre-flight.
+
+Lines: 427, 467, 674, 805, 823, 838, 1264, 1631, 1678, 1680, 1738, 1739, 1944, 2253, 2466, 2477, 2497
+
+
 - **Colour carries no meaning in any chart** (spec §10). Raw weigh-ins = hollow cerise circles; rolling average = 2px solid cerise line (same entity, same colour, deliberately); trajectory = 2px dashed muted-ink reference line, direct-labelled. No legend box.
 - **Never a dual-axis chart.** Pace and weekly distance are two separate charts.
 - **Every chart ships a "voir les chiffres" table view** and a pointer/touch crosshair.
@@ -887,7 +936,9 @@ git commit -m "feat: add the weight screen with rolling average and trajectory"
 - Test: `src/features/calories/WeekPlanner.test.tsx`
 
 **Interfaces:**
-- Consumes: `getOrCreateWeekPlan`, `updateWeekPlan`; `datesOfIsoWeek`, `weekdayShort`.
+- Consumes: `getWeekPlan`, `updateWeekPlan`; `effectiveWeekPlan`; `datesOfIsoWeek`, `weekdayShort`.
+
+**Read with `getWeekPlan`, never `getOrCreateWeekPlan`.** The get-or-create form *writes*, and this component reads inside `useLiveQuery` — a reactive read that writes to the table it observes. Worse, it is semantically wrong: §4.7 makes each `week_plan` the snapshot of what that week asked, so seeding an unvisited week with today's `DEFAULT_*` invents a snapshot nobody set, and then shows it back as fact. Browsing weeks would also queue sync pushes for rows the user never touched. Read with `getWeekPlan`, pass the result through the pure `effectiveWeekPlan` for display defaults, and let `updateWeekPlan` create the row on the first real edit.
 - Produces: `<WeekPlanner userId isoWeek />`
 
 Seven columns, each with two toggles: *sans dîner* and *course*. Writes only to that week's snapshot, so a past week is never rewritten.
@@ -954,7 +1005,8 @@ Expected: FAIL — module not found.
 
 ```tsx
 import { useLiveQuery } from 'dexie-react-hooks';
-import { getOrCreateWeekPlan, updateWeekPlan } from '@/db/repos';
+import { getWeekPlan, updateWeekPlan } from '@/db/repos';
+import { effectiveWeekPlan } from '@/domain/checklist';
 import { datesOfIsoWeek } from '@/domain/calendar';
 import type { IsoWeek, Weekday } from '@/domain/types';
 import { BowCheckbox } from '@/ui/BowCheckbox';
@@ -970,8 +1022,11 @@ function toggled(list: Weekday[], day: Weekday, next: boolean): Weekday[] {
 }
 
 export function WeekPlanner({ userId, isoWeek }: { userId: string; isoWeek: IsoWeek }) {
-  const plan = useLiveQuery(() => getOrCreateWeekPlan(userId, isoWeek), [userId, isoWeek]);
-  if (!plan) return <p>Un instant…</p>;
+  // Read-only: a reactive read must not write to the table it observes.
+  const stored = useLiveQuery(() => getWeekPlan(userId, isoWeek), [userId, isoWeek]);
+  // `undefined` means "not loaded yet" on the first pass and "no row" after;
+  // both render the defaults, and the first toggle creates the row.
+  const plan = effectiveWeekPlan(stored);
 
   const days = datesOfIsoWeek(isoWeek).map((_, index) => (index + 1) as Weekday);
 
@@ -1042,7 +1097,7 @@ git commit -m "feat: add the per-week no-dinner and run-day planner"
 - Test: `src/features/calories/useCalories.test.ts`
 
 **Interfaces:**
-- Consumes: `listCalorieEntries`, `saveCalorieEntry`, `softDelete`, `getOrCreateWeekPlan`, `getSettings`; `dayAllowance`, `weeklyBudget`, `weeklyRemaining`, `floorWarnings`; `datesOfIsoWeek`, `isoWeekOf`, `todayIn`.
+- Consumes: `listCalorieEntries`, `saveCalorieEntry`, `softDelete`, `getWeekPlan`, `getSettings`; `dayAllowance`, `weeklyBudget`, `weeklyRemaining`, `floorWarnings`, `dayCalorieTotal`, `weekCalorieTotal`; `effectiveWeekPlan`; `datesOfIsoWeek`, `isoWeekOf`, `todayIn`.
 - Produces:
   - `export interface CaloriesView { today; isoWeek; budget; consumed; remaining; overshoot; warnings; days }`
   - `export interface CaloriesDay { date; weekdayLabel; allowance; consumed; noDinner; entries }`
@@ -1149,9 +1204,11 @@ Expected: FAIL — module not found.
 
 ```ts
 import { useLiveQuery } from 'dexie-react-hooks';
-import { getOrCreateWeekPlan, getSettings, listCalorieEntries } from '@/db/repos';
+import { getSettings, getWeekPlan, listCalorieEntries } from '@/db/repos';
+import { effectiveWeekPlan } from '@/domain/checklist';
 import {
-  dayAllowance, floorWarnings, weeklyBudget, weeklyRemaining, type FloorWarning,
+  dayAllowance, dayCalorieTotal, floorWarnings, weekCalorieTotal,
+  weeklyBudget, weeklyRemaining, type FloorWarning,
 } from '@/domain/budget';
 import { datesOfIsoWeek, isoWeekOf, todayIn, weekdayOf } from '@/domain/calendar';
 import type { CalorieEntry, IsoDate, IsoWeek, Settings, WeekPlan } from '@/domain/types';
@@ -1191,7 +1248,9 @@ export function buildCaloriesView(input: CaloriesInputs): CaloriesView {
   const inWeek = new Set(weekDates);
 
   const entriesThisWeek = input.entries.filter((e) => inWeek.has(e.date));
-  const consumed = entriesThisWeek.reduce((sum, e) => sum + e.kcal, 0);
+  // §4.7's weekly sum lives in the domain; re-deriving it here is how it ended
+  // up implemented twice and tested nowhere.
+  const consumed = weekCalorieTotal(input.entries, isoWeek);
   const remaining = weeklyRemaining(isoWeek, plan, settings, consumed);
 
   const days: CaloriesDay[] = weekDates.map((d) => {
@@ -1200,7 +1259,7 @@ export function buildCaloriesView(input: CaloriesInputs): CaloriesView {
       date: d,
       weekdayLabel: weekdayShort(d),
       allowance: dayAllowance(d, plan, settings),
-      consumed: dayEntries.reduce((sum, e) => sum + e.kcal, 0),
+      consumed: dayCalorieTotal(dayEntries, d),
       // Read the plan directly. Comparing allowances would misreport every
       // day the moment dailyCalorieTarget and noDinnerAllowance coincide.
       noDinner: plan.noDinnerDays.includes(weekdayOf(d)),
@@ -1226,7 +1285,7 @@ export function useCalories(userId: string): CaloriesView | undefined {
     if (!settings) return undefined;
     const date = todayIn(settings.timezone);
     const [plan, entries] = await Promise.all([
-      getOrCreateWeekPlan(userId, isoWeekOf(date)),
+      getWeekPlan(userId, isoWeekOf(date)),
       listCalorieEntries(userId),
     ]);
     return buildCaloriesView({ date, settings, plan, entries });
@@ -1665,6 +1724,7 @@ export function Running({ userId }: { userId: string }) {
         </div>
         <p style={{ margin: '8px 0 0', color: 'var(--ink-soft)' }}>
           {view.summary.totalKm.toFixed(1).replace('.', ',')} km
+          {view.summary.totalDurationS > 0 && ` · ${formatDuration(view.summary.totalDurationS)}`}
           {view.summary.averagePaceSecondsPerKm !== null
             && ` · ${formatPace(view.summary.averagePaceSecondsPerKm)} /km`}
         </p>
@@ -2114,7 +2174,7 @@ import { Weight } from '@/features/weight/Weight';
 
 - [ ] **Step 4: Run the full suite**
 
-Run: `npm test && npx tsc --noEmit`
+Run: `npm test && npx tsc -b`
 Expected: everything PASS, no type errors.
 
 - [ ] **Step 5: Commit**
@@ -2465,7 +2525,7 @@ export function CycleComplete({
               {kg(summary.startWeight)} →{' '}
               {summary.endWeight === null ? '—' : kg(summary.endWeight)} kg
               {summary.deltaKg !== null
-                && ` (${summary.deltaKg < 0 ? '−' : '+'}${kg(Math.abs(summary.deltaKg))})`}
+                && ` (${summary.deltaKg < 0 ? '\u2212' : '+'}${kg(Math.abs(summary.deltaKg))})`}
             </span>
           </div>
           <div style={{ display: 'flex', justifyContent: 'space-between' }}>
@@ -2547,7 +2607,7 @@ and return `<div className="app"><CycleComplete userId={userId} settings={settin
 
 - [ ] **Step 6: Run the tests and commit**
 
-Run: `npm test && npx tsc --noEmit`
+Run: `npm test && npx tsc -b`
 Expected: all PASS.
 
 ```bash
@@ -2559,7 +2619,7 @@ git commit -m "feat: archive a finished cycle and prompt for the next goal"
 
 ## Plan 3 Done When
 
-- `npm test` and `npx tsc --noEmit` are clean.
+- `npm test` and `npx tsc -b` are clean.
 - No chart uses two y-scales. Verify by inspection: each `<Chart>` has exactly one `yFormat`.
 - No chart distinguishes series by colour alone. Verify: `grep -rE "var\(--rose\)" src/ui/marks.tsx` returns nothing — marks use `--cerise` for data and `--ink-soft` for the reference line only.
 - Every chart has a working "Voir les chiffres" table.

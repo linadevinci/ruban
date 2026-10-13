@@ -1,0 +1,28 @@
+.bowbox {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  width: 100%;
+  padding: 11px 2px;
+  background: none;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.bowbox[aria-disabled="true"] { cursor: default; opacity: 0.55; }
+.bowbox__mark {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border: 1.6px solid var(--line);
+  border-radius: 50%;
+  background: var(--surface);
+}
+.bowbox--on .bowbox__mark { border-color: transparent; background: none; }
+.bowbox__bow { width: 26px; height: 26px; fill: var(--cerise); }
+.bowbox__label { flex: 1; }
+.bowbox--on .bowbox__label { color: var(--ink); }

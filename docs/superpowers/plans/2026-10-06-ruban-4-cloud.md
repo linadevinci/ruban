@@ -14,15 +14,50 @@
 
 ## Global Constraints
 
+- **`updateDayLog` and `stampDayLog` must treat a tombstoned row as absent, and this plan is where it becomes reachable.** Both find the row with `where('[userId+date]')` and no `deletedAt` filter, so once this plan's pull can tombstone a day log, every later tick writes into the invisible row with its `deletedAt` intact. `getDayLog` then keeps returning `undefined`, so the screen shows an unlogged day and **the checkbox appears to do nothing, forever** — while an outbox push is queued for a tombstoned row on every tap. `stampDayLog` is worse: it reads the dead row's `validatedAt`, returns `fireBonus: true`, and stamps `bonusFiredAt` on a row no screen will ever show, so the one-time celebration is spent invisibly.
+  The `[userId+date]` index is unique, so inserting a second row is not an option: the fix is to **resurrect** — clear `deletedAt` and reset the stale fields, treating the row as new. Plan 2 recorded this as solved at one point, on the mistaken grounds that the hazard was the placeholder inheriting the dead row's id. It was not; the id is irrelevant, because writes key off the date. Verified by probe, not by reading.
+- **Coalesce the outbox by `table + rowId` before pushing, keeping only the newest entry per row.** Plan 2's amount inputs write on every keystroke, so typing a four-digit step count enqueues four rows for one logical change. All four are correct under last-write-wins and three are wasted round trips on a free-tier budget. Ordering still comes from `seq`.
 Plan 1's Global Constraints apply in full. Added here:
+- **The escape rule, as sharpened during Plan 2:** escape the characters that look like an ASCII neighbour (U+202F, U+00A0, U+2212, U+2014, U+2019, U+2026, U+00B7); write accented letters literally (`départ`, not an escape), because they are visibly distinct and cannot be silently substituted. Code comments stay ASCII. Plan 2's Global Constraints carry the full statement.
+
+
+**Pre-flight, before any task here is dispatched: this plan's code blocks contain literal
+confusable characters and they must become `\u` escapes.** A scan counted 13 such lines,
+listed at the end of this paragraph. Most are the French right single quote U+2019 in UI strings
+(`l’écran`, `c’est`), which renders identically to an ASCII apostrophe and is one careless edit
+away from becoming one. **This cannot be done with a bulk search and replace**, because the right
+fix depends on context: inside a string or template literal the escape works on its own, but in
+JSX *text* it does not — there it must be wrapped in braces as an expression, and a blind
+rewrite would emit a literal backslash-u into the rendered page. Em dashes and ellipses inside
+code *comments* take plain ASCII rather than an escape, since comments stay ASCII and an escape
+in a comment just reads as noise. Work through these by hand at pre-flight.
+
+Lines: 589, 1000, 1089, 1146, 1270, 1357, 1503, 1516, 1527, 1536, 1571, 1574, 1592
+
 
 - **`bcryptjs`, not `bcrypt`.** Cost 12, per spec §8.
 - **Cursors use server time; last-write-wins uses client time** (spec §7). Realised by a `serverUpdatedAt` column that **only the database ever writes**: pulls filter on it, merges compare the client's `updatedAt`. This is what makes "a skewed phone clock must never cause a row to be *missed*" actually true.
 - **Nothing is ever hard-deleted.** Tombstones sync like any other change.
+- **A tombstoned `dayLogs` or `weekPlans` row needs a resurrect path, and this plan is where
+  it becomes reachable.** Note what Task 7 of Plan 2 already does and does not solve: its
+  read path is guarded — it reads with the read-only `getDayLog`, which filters tombstones,
+  and substitutes a placeholder built from scratch, so no dead row's id is inherited. **The write
+  path is still unguarded**: `updateDayLog` finds the row by `[userId+date]` with no `deletedAt`
+  filter and its patch type excludes `deletedAt`, so a tick on a tombstoned day spreads over a
+  base whose `deletedAt` is non-null and is then filtered straight back out of every read. The
+  tick vanishes silently; the screen merely looks consistently unlogged while it happens. Whatever resurrect rule this plan settles on has to cover the write path too, or a
+  user's ticks will land somewhere no screen ever shows them. `softDelete`'s table union excludes both, and `updateDayLog`'s
+  patch type omits `deletedAt`, so neither can be tombstoned locally — but a pull can
+  tombstone either. Once that happens the unique natural-key index forbids creating a fresh
+  row for that date, and `updateDayLog` would write to a row every read filters out: the
+  user's ticks would silently vanish. Define the behaviour explicitly — the straightforward
+  answer is that applying a local write to a tombstoned natural key clears `deletedAt` on
+  the existing row rather than inserting a new one — and test it.
 - **Conflicts are per record, not per field.**
 - **Auth never gates launching the app** (spec §8). The cookie is checked on sync, never on boot.
 - **Secrets live in Vercel environment variables**, never in the repo: `DATABASE_URL`, `JWT_SECRET`, `CRON_SECRET`, `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`. `.env*` is already git-ignored.
 - **The deployment URL is public** — Hobby has no password protection — so the login backoff is a requirement, not ceremony.
+- **Validate dates arriving from the server, or a corrupt row blanks a screen.** Plan 2 made `parseIsoDate` strict: it throws on anything that is not a real `YYYY-MM-DD`. Onboarding validates what the user types, but **this plan is the other way dates get in**, and the pull path writes rows straight into Dexie. A single bad `goalDate`, `date` or `isoWeek` — from a partial write, a hand-edited row, or a future server bug — then throws during render wherever it is read, and the screen goes white with an unhandled error. Two earlier findings on this project turned out to be exactly this failure, so it is not hypothetical. Use `isIsoDate` from `@/domain/calendar` to reject or quarantine a row whose date fields are malformed, rather than applying it and discovering the problem at render time.
 
 ---
 
@@ -181,7 +216,13 @@ git commit -m "feat: add the shared last-write-wins rule and sync protocol"
 
 ```bash
 npm install drizzle-orm @neondatabase/serverless bcryptjs jose
-npm install -D drizzle-kit @vercel/node @types/bcryptjs
+npm install -D drizzle-kit @vercel/node
+```
+
+**Do not install `@types/bcryptjs`.** Verified on npm: it is published only as a deprecated stub ("bcryptjs provides its own type definitions, so you do not need this installed"), and bcryptjs 3 ships `umd/index.d.ts` itself.
+
+```bash
+# nothing further to install
 ```
 
 **Interfaces:**
@@ -437,6 +478,8 @@ git commit -m "feat: add Postgres schema on Neon with dual timestamps"
 The recovery alphabet excludes `0 O 1 I L` — this code gets written on paper and read back months later.
 
 Add to `vite.config.ts` `test.include`: `'api/**/*.test.ts'`.
+
+**Also extend `tsconfig.node.json`'s `include`** to `["vite.config.ts", "api/**/*.ts", "db/**/*.ts", "drizzle.config.ts"]`, and add `"strict": true` to its `compilerOptions`. As scaffolded it includes only `vite.config.ts` and is not strict, so `npx tsc -b` would never type-check a single serverless function — the same false-pass trap as `--noEmit`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -888,7 +931,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
 - [ ] **Step 4: Type-check**
 
-Run: `npx tsc --noEmit`
+Run: `npx tsc -b`
 Expected: no errors.
 
 - [ ] **Step 5: Commit**
@@ -999,7 +1042,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
 - [ ] **Step 2: Type-check**
 
-Run: `npx tsc --noEmit`
+Run: `npx tsc -b`
 Expected: no errors. If Drizzle's generic upsert types fight the dynamic table lookup, narrow with a `switch` over the six table names rather than widening to `any` — the cast must stay at the row level, never the table level.
 
 - [ ] **Step 3: Commit**
@@ -1022,7 +1065,10 @@ git commit -m "feat: add the sync endpoint with SQL-enforced last-write-wins"
 - Produces:
   - `export type Transport = (request: SyncRequest) => Promise<SyncResponse>`
   - `syncOnce(transport: Transport): Promise<SyncOutcome>`
-  - `export interface SyncOutcome { pushed: number; pulled: number; skipped: number; cursor: string | null }`
+  - `export interface SyncOutcome { pushed: number; pulled: number; skipped: number; collisions: number; cursor: string | null }`
+  - `findByNaturalKey(table: SyncedTableName, row: Record<string, unknown>): Promise<{ id: string; updatedAt: string } | undefined>` — looks a row up by `[userId+date]` for `dayLogs`/`weights`, `[userId+isoWeek]` for `weekPlans`, and returns `undefined` for every other table, which has no natural-key constraint
+
+**New requirement, from Plan 1's hardening.** Plan 1 made `dayLogs`, `weights` and `weekPlans` **unique** on their natural key, which changes this endpoint's pull path: `put`ting a server row whose `(userId, date)` is already held locally under a *different* id now rejects with `ConstraintError` instead of silently creating a second row. The engine must catch that, resolve it by the same client-`updatedAt` rule, tombstone the loser, and count it. A test must cover it: seed a local row, pull a server row with the same natural key, a different id and a newer `updatedAt`, and assert the server row wins, the local one is tombstoned, and `collisions` is 1. Without this branch the outbox wedges on the first two-device collision — which is the failure spec §5 says is currently unresolved.
   - `httpTransport: Transport`
   - `useSyncStatus(): { pending: number; lastSyncAt: string | null; online: boolean }`
   - meta keys `SYNC_CURSOR_KEY`, `LAST_SYNC_KEY`
@@ -1044,7 +1090,7 @@ beforeEach(async () => {
   await Promise.all([
     db.weights.clear(), db.runs.clear(), db.dayLogs.clear(),
     db.calorieEntries.clear(), db.weekPlans.clear(), db.settings.clear(),
-    db.outbox.clear(), db.meta.clear(),
+    db.cycles.clear(), db.outbox.clear(), db.meta.clear(),
   ]);
 });
 
@@ -1241,6 +1287,9 @@ export interface SyncOutcome {
   pushed: number;
   pulled: number;
   skipped: number;
+  /** Natural-key collisions resolved during the pull. Non-zero means two
+   *  devices minted different ids for one logical row — see spec §5. */
+  collisions: number;
   cursor: string | null;
 }
 
@@ -1316,11 +1365,31 @@ export async function syncOnce(transport: Transport): Promise<SyncOutcome> {
         const id = row[key];
         if (typeof id !== 'string' || typeof row.updatedAt !== 'string') continue;
         const stored = await db[table].get(id as never) as { updatedAt?: string } | undefined;
-        if (shouldApply(stored?.updatedAt ?? null, row.updatedAt)) {
+        if (!shouldApply(stored?.updatedAt ?? null, row.updatedAt)) {
+          skipped += 1;
+          continue;
+        }
+        try {
           await db[table].put(row as never);
           pulled += 1;
-        } else {
-          skipped += 1;
+        } catch (error) {
+          // Plan 1 made dayLogs, weights and weekPlans UNIQUE on their natural
+          // key, so this put rejects when a *different* local id already holds
+          // that key — the two-device collision spec §5 records. Resolve it the
+          // same way as any other conflict, by client updatedAt, and tombstone
+          // the loser so the duplicate stops being resurrected.
+          if ((error as { name?: string }).name !== 'ConstraintError') throw error;
+          const rival = await findByNaturalKey(table, row);
+          if (rival && shouldApply(rival.updatedAt, row.updatedAt)) {
+            await db[table].update(rival.id as never, {
+              deletedAt: row.updatedAt, updatedAt: row.updatedAt,
+            });
+            await db[table].put(row as never);
+            pulled += 1;
+          } else {
+            skipped += 1;
+          }
+          collisions += 1;
         }
       }
     });
@@ -1392,6 +1461,19 @@ git commit -m "feat: add the client sync engine with an injectable transport"
 
 **Interfaces:**
 - Produces: `<Account userId />` — signed-out state offers sign-up and sign-in; signed-in state shows the username, pending count, last sync and a "Synchroniser" button. Sign-up shows the recovery code **once**, with a confirmation checkbox before dismissing it.
+- Also produces: **sign-out**, and **signing in as a different account on the same device**.
+
+**This task was missing more than UI, and the missing part is plumbing.** The user asked for a username-only login "so that we can have multiple accounts", and as written this plan gives one account per device: `<Account userId />` takes a fixed id, there is no sign-out anywhere in the five plans, and the shell's gate reads *no current user → onboarding*. So signing out would drop her into onboarding, `ensureLocalUser` would mint a **new** local id, and she would come back as a stranger with an empty app instead of signing back in. Three things are needed:
+
+1. **Sign out** — clear `currentUserId` from `db.meta`. Refuse while the outbox is non-empty, or sync first and say so: signing out with unpushed rows on a device she then hands to someone else is how a day's ticks disappear for good.
+2. **A third shell state.** `src/app/App.tsx` currently has *opening / failed / open*, and then *no user → onboarding*. It needs *no user, but accounts exist on this device or on the server* → offer sign-in, with onboarding as the deliberate "start fresh" choice rather than the default. Onboarding must never be reachable by accident from a signed-out state.
+3. **Adopting an id on sign-in.** Sign-**up** claims the local rows for the new account, which is what the smoke test checks. Sign-**in** to an account that already exists must adopt the *server's* user id and point `currentUserId` at it — it must not keep a locally minted id, or the device writes rows under an id the server has never heard of and the pull returns nothing she recognises.
+
+**The data model already supports this and needs no change**, which is why it is cheap: every table is keyed by `userId`, with `[userId+date]` and `[userId+isoWeek]` compound indexes, so two accounts' rows coexist in one IndexedDB without either seeing the other.
+
+**Decision on sign-out, stated rather than assumed: the local rows stay on the device.** They are hers, and wiping them would throw away anything the outbox has not pushed. The consequence to be honest about: on a shared device the other account's rows remain in that browser's storage — never displayed, since every read filters by `userId`, but present. So offer wiping as a separate, explicit, confirmed action ("retirer les données de cet appareil"), never as a side effect of signing out.
+
+**Tests owed:** signing out and back in to the same account shows her data again, not an empty app; signing out does not reach onboarding; two accounts on one device never see each other's rows (seed both, assert each reads only its own); sign-in adopts the server id rather than a local one; and sign-out with a non-empty outbox either refuses or syncs first.
 
 - [ ] **Step 1: Implement the account panel**
 
@@ -1576,7 +1658,7 @@ with `import { useEffect } from 'react';` and `import { httpTransport, syncOnce 
 
 - [ ] **Step 3: Run the full suite**
 
-Run: `npm test && npx tsc --noEmit`
+Run: `npm test && npx tsc -b`
 Expected: everything PASS.
 
 - [ ] **Step 4: Smoke-test against a real deployment**
@@ -1752,7 +1834,7 @@ git commit -m "test: add end-to-end onboarding and offline-sync flows"
 
 ## Plan 4 Done When
 
-- `npm test` and `npx tsc --noEmit` are clean.
+- `npm test` and `npx tsc -b` are clean.
 - The merge rule exists exactly once: `grep -rn "shouldApply" src/ api/ | wc -l` shows only the definition and its two call sites.
 - No serverless function reaches Dexie: `grep -rn "db/schema" api/` returns nothing.
 - Nothing `api/` imports uses the Vite alias: `grep -rn "from '@/" src/sync/ src/shared/ src/domain/` returns nothing.

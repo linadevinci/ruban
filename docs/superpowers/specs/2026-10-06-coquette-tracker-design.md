@@ -58,7 +58,9 @@ A "day" is a local calendar date (`YYYY-MM-DD`). Weeks are ISO weeks beginning M
 
 Exactly one function converts an instant into a local date: `todayIn(tz)`, built on `Intl.DateTimeFormat` with the user's stored IANA timezone — never UTC, never the browser's ambient zone. Every other date operation is pure calendar arithmetic over `YYYY-MM-DD` strings, parsed at **UTC noon** so no shift can cross a date boundary. Timezones and DST therefore cannot reach the rest of the domain layer, which is why no date library is required.
 
-**European DST ends on Sunday 25 October 2026**, inside the goal window. That date gets explicit test cases in streak continuity and in reminder dispatch.
+**European DST ends on Sunday 25 October 2026**, inside the goal window, and begins again on Sunday 29 March. Both dates get test cases.
+
+**A correction worth carrying, found while hardening the tests:** 25 October is the *fall-back* transition, and a wrong implementation — one that parses dates at local midnight and floors the difference — still gets a 25-hour day right. So a test dated 25 October passes whether the code is correct or not, which is why six such cases sat in the suite proving nothing. **Spring forward is the direction that discriminates:** a 23-hour day is where local-midnight parsing rounds to zero and a day silently disappears. Date tests that mean to prove DST safety must use a spring-forward window (29 March 2026, 28 March 2027), and the suite must pin `TZ` to a zone that observes it — under the default `TZ` even a correct assertion cannot fail. The 25 October cases are kept as regression documentation, not as proof.
 
 ### 4.2 The checklist is day-aware
 
@@ -141,15 +143,18 @@ From `goal_date + 1`, the app presents a cycle summary — weight delta, run cou
 
 ## 5. Data model
 
-Nine tables in Phase 1, mirrored between Dexie and Postgres. Every synced row carries a client-generated **UUIDv7** `id` (time-sortable, collision-free without a server round trip), an `updated_at`, and a `deleted_at` tombstone. **Nothing is ever hard-deleted** — a hard delete racing a pending sync resurrects the row.
+Ten tables in Phase 1, mirrored between Dexie and Postgres. Every synced row carries a client-generated **UUIDv7** `id` (time-sortable, collision-free without a server round trip), an `updated_at`, and a `deleted_at` tombstone. **Nothing is ever hard-deleted** — a hard delete racing a pending sync resurrects the row.
+
+**`settings` is the one exception, deliberately.** It is a per-user singleton keyed by `user_id`, so it carries no separate `id` — the user id *is* the key — and no `deleted_at`, because deleting your settings is deleting your account, not an operation the app offers. Every layer that walks the synced tables therefore branches on it: the Dexie table is keyed `userId`, the sync engine and the sync endpoint pick the key per table, and `softDelete`'s type signature excludes `settings` outright. Do not “fix” this by giving `settings` an `id`; that breaks its primary key in Dexie and Postgres both.
 
 - `users` — id, username (unique), password_hash, recovery_code_hash, created_at
 - `settings` — user_id (pk), timezone, start_date, start_weight, target_weight, goal_date, weigh_in_cadence, daily_calorie_target, no_dinner_allowance, calorie_floor, step_target, water_target, run_sessions_target, sound_enabled, updated_at
 - `day_logs` — id, user_id, date, ticks (jsonb map of item → bool), steps, water_glasses, jokered, validated_at, bonus_fired_at, mood, energy, note, updated_at, deleted_at. Unique on (user_id, date)
-- `weights` — id, user_id, date, kg, updated_at, deleted_at
+- `weights` — id, user_id, date, kg, updated_at, deleted_at. Unique on (user_id, date)
 - `calorie_entries` — id, user_id, date, label, kcal, updated_at, deleted_at
 - `runs` — id, user_id, date, distance_km, duration_s, note, updated_at, deleted_at
 - `week_plans` — id, user_id, iso_week (`2026-W41`), no_dinner_days (int[]), run_days (int[]), joker_used_on, updated_at. Unique on (user_id, iso_week)
+- `cycles` — id, user_id, start_date, goal_date, start_weight, target_weight, end_weight, closed_at, updated_at, deleted_at. One row per closed goal period. Required by §4.9: starting a new goal overwrites `settings.start_date`, so without this the finished cycle's own boundaries are lost. Only the boundaries are stored — every figure in the summary stays derived from the day logs, runs and weigh-ins.
 - `push_subscriptions` — id, user_id, endpoint, p256dh, auth, user_agent, created_at
 - `reminders` — id, user_id, kind, days_of_week (int[]), local_time, enabled, updated_at
 
@@ -159,6 +164,10 @@ Server-only, not synced to the client:
 - `login_attempts` — username, attempts, locked_until
 
 `ticks` is a jsonb map rather than fixed columns so Phase 2's pilates and class items need no migration.
+
+**The uniqueness constraints above and the client-generated-id rule are in tension, deliberately recorded rather than resolved here.** `day_logs`, `weights` and `week_plans` are singletons per key: one row per (user, date) or (user, ISO week). But each client mints its own UUIDv7, so two devices that open the app offline on the same day each create a *different* id for the same logical row. Locally both rows exist and a `.first()` lookup silently picks one, losing the other's data; on sync the second violates the unique constraint and the outbox stops draining.
+
+Phase 1 mitigates this by declaring the Dexie compound indexes unique, which turns a silent split into a loud `ConstraintError` at the point of creation. That is a guard, not a fix. **Plan 4 must settle it before multi-device sync ships**, and the two candidate answers conflict with rules stated elsewhere in this document: either these three tables get a *deterministic* id derived from their key (contradicting the UUIDv7 rule above), or §7's merge gains a defined rule for two ids claiming one key (contradicting "conflicts are per record"). Until then the app is single-device-safe and multi-device-unsafe, which is acceptable only because §7's own premise is one person on one phone.
 
 **Derived, never stored:** streak, rolling average, weekly budget and remaining, pace, trajectory values, badge eligibility. Computed on read so a settings change recalculates cleanly with nothing to fall out of sync. The deliberate exceptions are the event stamps `validated_at`, `bonus_fired_at` and `joker_used_on` — those are facts about what happened, not derivations from current settings.
 
@@ -188,7 +197,7 @@ Features own their screens and read through `db/`; they never reach into each ot
 
 Single endpoint, `POST /api/sync`, body `{ since, changes[] }`.
 
-1. Every local write lands in a Dexie `outbox` row `{ id, table, op, payload, created_at, attempts }` inside the same transaction as the data write, then the UI returns. The network is never on the critical path.
+1. Every local write lands in a Dexie `outbox` row `{ seq, table, op, payload, created_at, attempts }` inside the same transaction as the data write, then the UI returns. **`seq` is an auto-increment integer, not a uuid** — that is what gives the queue its ordering guarantee, so replay happens in the order the writes were made. An opaque id would not, and ordering matters here: two edits to one field must reach the server in the order the user made them. The network is never on the critical path.
 2. The server applies each incoming change **only where its `updated_at` is strictly newer** than the stored row's, then returns every row of that user changed since `since`.
 3. The client applies the returned rows, clears the acknowledged outbox entries, and stores the new cursor.
 
@@ -218,7 +227,11 @@ Phase 1 reminders: *pas de dîner ce soir* on no-dinner evenings; an evening nud
 
 ## 10. Design system
 
-**Palette.** Coquette is dustier and warmer than candy pink, which is the trap that makes this genre read as a toy. Blush paper ground `#F7E3E6`, cream card surfaces `#FFFBF7`, rose primary `#E89BB0`, cerise `#C2567A` for emphasis, and — the decision that carries the most weight — body text in deep plum-brown `#6E2B45` rather than black. A dark theme in plum-black with the roses raised in chroma, because the checklist gets ticked at 23h in bed. Both themes are first-class.
+**Palette.** Coquette is dustier and warmer than candy pink, which is the trap that makes this genre read as a toy.
+
+**Two values were darkened for contrast, and the reason is a requirement, not a preference.** The first draft used ink-soft `#9A6579` and cerise `#C2567A`. Measured against WCAG, both failed AA for small text on the light grounds: ink-soft gave 3.79:1 on the blush ground and 4.25:1 on the inset, and cerise — which carries the gap readout, the floor warnings and every error message — gave 3.48:1 on the ground and 4.16:1 even on the cream surface. Cerise also fails as a *fill*: surface-coloured text on a `#C2567A` button is 4.16:1. The corrected values are **ink-soft `#8A5669`** (4.73 / 5.64 / 5.31 across ground, surface and inset) and **cerise `#A64264`** (4.77:1 as text on the ground, 5.69:1 under surface-coloured text). Both sit a step deeper in the same hue family. The dark theme needed no change — every token there clears 6.6:1.
+
+**`--rose` is a fill colour only and must never carry text.** At 1.75:1 against the ground it is unreadable as type. It is correct behind text (`--on-rose` on `--rose` is 7.21:1) and correct as a mark, and nowhere else. Blush paper ground `#F7E3E6`, cream card surfaces `#FFFBF7`, rose primary `#E89BB0`, cerise `#A64264` for emphasis, and — the decision that carries the most weight — body text in deep plum-brown `#6E2B45` rather than black. A dark theme in plum-black with the roses raised in chroma, because the checklist gets ticked at 23h in bed. Both themes are first-class.
 
 **Type.** Cormorant Garamond for display — the weight number, the streak count, the countdown — because a high-contrast serif at size reads as composed rather than cute. **Jost** for UI, body and labels: a geometric sans whose circular forms contrast with the serif instead of echoing it, and whose letterspaced small caps carry the uppercase labels. Caveat for handwritten notes, used perhaps three times in the entire app.
 

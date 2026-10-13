@@ -23,9 +23,12 @@ These apply to every task in every Ruban plan. Values are copied verbatim from t
 - **Defaults:** run days `[1,2,4,6,7]`, no-dinner days `[3,7]`, `runSessionsTarget` 5, `MIN_WEIGH_INS_FOR_AVERAGE` 3, `goalDate` `2026-11-12`.
 - **TypeScript is strict.** No `any`, no non-null assertions in domain code.
 - **UI language is French, tutoiement.** (Plans 2–3.)
-- **Palette:** ground `#F7E3E6`, surface `#FFFBF7`, inset `#FDF2F4`, rose `#E89BB0`, cerise `#C2567A`, ink `#6E2B45`, line `#EDCCD6`. Dark: ground `#1B0F15`, surface `#2A1821`, inset `#231420`, ink `#F7E5EA`, ink-soft `#C098AA`, rose `#EFA6BA`, cerise `#F57FA6`, line `#412833`. (Plan 2.)
+- **Palette:** ground `#F7E3E6`, surface `#FFFBF7`, inset `#FDF2F4`, rose `#E89BB0`, cerise `#A64264`, ink `#6E2B45`, line `#EDCCD6`. Dark: ground `#1B0F15`, surface `#2A1821`, inset `#231420`, ink `#F7E5EA`, ink-soft `#C098AA`, rose `#EFA6BA`, cerise `#F57FA6`, line `#412833`. (Plan 2.)
 - **Type:** Cormorant Garamond (display), Jost (UI/body/labels), Caveat (sparingly). (Plan 2.)
 - **Commit after every task.** Conventional Commit prefixes (`feat:`, `test:`, `chore:`).
+- **Type-check with `npx tsc -b`, never `npx tsc --noEmit`.** The root `tsconfig.json` is references-only (`files: []`), so `--noEmit` type-checks *nothing* and exits 0 on real errors. Verified on this project: a deliberate `const x: number = "nope"` passed `--noEmit` and failed `tsc -b` with exit 2.
+- **Actual toolchain, confirmed at install time** (newer than this plan was written against): Vite 8, TypeScript 6, React 19.2, `@vitejs/plugin-react` 6, Vitest 5, Dexie 4.4, oxlint (no eslint). `compilerOptions` live in **`tsconfig.app.json`** — the root tsconfig has none.
+- **The template already sets `verbatimModuleSyntax`, `erasableSyntaxOnly`, `noUnusedLocals` and `noUnusedParameters`.** So: type-only imports must say `import type`; no enums or parameter properties; and an unused binding must be `_`-prefixed to be accepted in a destructuring pattern.
 
 ---
 
@@ -49,89 +52,33 @@ These apply to every task in every Ruban plan. Values are copied verbatim from t
 
 ---
 
-### Task 1: Project scaffold
+### Task 1: Project scaffold — **COMPLETE** (controller, commit e8fad6a)
 
-**Files:**
-- Create: `package.json`, `tsconfig.json`, `tsconfig.node.json`, `vite.config.ts`, `index.html`, `src/main.tsx`, `src/App.tsx`
-- Modify: `.gitignore` (already present)
+Executed by the controller as reconnaissance, not by a subagent, because it
+installs every dependency and so is the first chance to check the real APIs
+against what these plans assume. What it found is recorded in the Global
+Constraints above and in the ledger. Recorded here so the plan matches reality:
 
-**Interfaces:**
-- Consumes: nothing.
-- Produces: `npm test` runs Vitest; `npm run dev` serves the app; `@/` resolves to `src/`.
+**Done:**
+- Scaffolded `npm create vite@latest ruban -- --template react-ts` **into the
+  scratchpad first**, then copied the files in. The in-place form prompts about
+  the non-empty directory and one of its options removes existing files — not
+  worth pointing at a directory holding `.git` and `docs/`.
+- `npm install` plus `dexie uuidv7` and dev `vitest @vitest/coverage-v8 jsdom
+  fake-indexeddb`.
+- `vite.config.ts` rewritten: `defineConfig` from **`vitest/config`** (the one
+  from `vite` rejects the `test` key), the `@` alias, and
+  `test: { environment: 'node', include: ['src/**/*.test.ts', 'src/**/*.test.tsx'] }`.
+- `tsconfig.app.json` — **not** `tsconfig.json` — gained `strict: true`,
+  `noUncheckedIndexedAccess: true` and `paths: { "@/*": ["./src/*"] }`. The
+  leading `./` is required: without `baseUrl`, a bare `src/*` fails with TS5090.
+- `package.json`: `name: "ruban"`, scripts `test` and `test:watch`.
+- Verified the alias resolves in **both** toolchains (a temporary module imported
+  through `@/`, then deleted), `npm test` green, `npx tsc -b` exit 0.
 
-- [ ] **Step 1: Scaffold and install**
-
-```bash
-cd /home/linoux/site-sport
-npm create vite@latest . -- --template react-ts
-npm install
-npm install dexie uuidv7
-npm install -D vitest @vitest/coverage-v8 jsdom
-```
-
-If `npm create vite` refuses because the directory is not empty, answer "Ignore files and continue". It will not touch `docs/` or `.git/`.
-
-- [ ] **Step 2: Add the test script and path alias**
-
-In `package.json`, add to `"scripts"`:
-
-```json
-"test": "vitest run",
-"test:watch": "vitest"
-```
-
-Replace `vite.config.ts` with:
-
-```ts
-import { defineConfig } from 'vitest/config';
-import react from '@vitejs/plugin-react';
-import { fileURLToPath, URL } from 'node:url';
-
-export default defineConfig({
-  plugins: [react()],
-  resolve: {
-    alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) },
-  },
-  test: {
-    environment: 'node',
-    include: ['src/**/*.test.ts', 'src/**/*.test.tsx'],
-  },
-});
-```
-
-In `tsconfig.json`, inside `compilerOptions`, add:
-
-```json
-"baseUrl": ".",
-"paths": { "@/*": ["src/*"] },
-"strict": true,
-"noUncheckedIndexedAccess": true
-```
-
-- [ ] **Step 3: Verify the toolchain runs**
-
-Create `src/domain/smoke.test.ts`:
-
-```ts
-import { describe, expect, it } from 'vitest';
-
-describe('toolchain', () => {
-  it('runs tests', () => {
-    expect(1 + 1).toBe(2);
-  });
-});
-```
-
-Run: `npm test`
-Expected: PASS, 1 test.
-
-- [ ] **Step 4: Delete the smoke test and commit**
-
-```bash
-rm src/domain/smoke.test.ts
-git add -A
-git commit -m "chore: scaffold Vite + React + TS + Vitest"
-```
+**Deliberately not done:** the template's `src/App.tsx`, `src/App.css`,
+`src/index.css`, `src/assets/` and `public/*` are still in place. Plan 2 Task 1
+deletes the stylesheets and Task 11 deletes `App.tsx`.
 
 ---
 
@@ -259,7 +206,7 @@ export type SyncedTableName = (typeof SYNCED_TABLES)[number];
 
 - [ ] **Step 2: Verify it compiles**
 
-Run: `npx tsc --noEmit`
+Run: `npx tsc -b`
 Expected: no errors.
 
 - [ ] **Step 3: Commit**
@@ -281,7 +228,7 @@ git commit -m "feat: add domain types, defaults and the shared table list"
 - Consumes: `IsoDate`, `IsoWeek`, `Weekday` from `@/domain/types`.
 - Produces:
   - `parseIsoDate(d: IsoDate): Date` — UTC noon
-  - `formatIsoDate(dt: Date): IsoDate`
+  - `formatUtcNoonDate(dt: Date): IsoDate`
   - `addDays(d: IsoDate, n: number): IsoDate`
   - `diffDays(from: IsoDate, to: IsoDate): number`
   - `weekdayOf(d: IsoDate): Weekday`
@@ -294,17 +241,50 @@ git commit -m "feat: add domain types, defaults and the shared table list"
 ```ts
 import { describe, expect, it } from 'vitest';
 import {
-  addDays, datesOfIsoWeek, diffDays, formatIsoDate, isoWeekOf,
+  addDays, datesOfIsoWeek, diffDays, formatUtcNoonDate, isoWeekOf,
   parseIsoDate, todayIn, weekdayOf,
 } from '@/domain/calendar';
 
-describe('parseIsoDate / formatIsoDate', () => {
+describe('parseIsoDate / formatUtcNoonDate', () => {
   it('parses at UTC noon so no shift crosses a date boundary', () => {
     expect(parseIsoDate('2026-10-06').toISOString()).toBe('2026-10-06T12:00:00.000Z');
   });
 
   it('round-trips', () => {
-    expect(formatIsoDate(parseIsoDate('2026-11-12'))).toBe('2026-11-12');
+    expect(formatUtcNoonDate(parseIsoDate('2026-11-12'))).toBe('2026-11-12');
+  });
+});
+
+describe('parseIsoDate rejects malformed input', () => {
+  it('throws rather than inventing a date', () => {
+    // '' used to yield 1900-01-01: the split gave [0], the nullish fallbacks
+    // filled the rest, and Date.UTC maps year 0 to 1900. Downstream figures
+    // then looked plausible and were meaningless.
+    expect(() => parseIsoDate('')).toThrow(/Not an ISO date/);
+    expect(() => parseIsoDate('garbage')).toThrow(/Not an ISO date/);
+    expect(() => parseIsoDate('2026-10')).toThrow(/Not an ISO date/);
+    expect(() => parseIsoDate('2026-1-1')).toThrow(/Not an ISO date/);
+  });
+
+  it('rejects a well-formed date that is not a real one', () => {
+    // The shape regex passes these; Date.UTC would silently roll them over.
+    expect(() => parseIsoDate('2026-02-31')).toThrow(/Not a real calendar date/);
+    expect(() => parseIsoDate('2026-13-01')).toThrow(/Not a real calendar date/);
+    expect(() => parseIsoDate('2026-00-10')).toThrow(/Not a real calendar date/);
+    // ...but a real leap day is accepted.
+    expect(formatUtcNoonDate(parseIsoDate('2028-02-29'))).toBe('2028-02-29');
+  });
+});
+
+describe('isIsoDate', () => {
+  it('accepts a real date and rejects everything parseIsoDate would', () => {
+    expect(isIsoDate('2026-11-12')).toBe(true);
+    expect(isIsoDate('')).toBe(false);
+    expect(isIsoDate('garbage')).toBe(false);
+    expect(isIsoDate('2026-02-31')).toBe(false);
+    // A date input can emit a 5-digit year; this is what stops it reaching
+    // parseIsoDate during a render and blanking the screen.
+    expect(isIsoDate('12026-01-01')).toBe(false);
   });
 });
 
@@ -392,18 +372,48 @@ import type { IsoDate, IsoWeek, Weekday } from './types';
 
 const DAY_MS = 86_400_000;
 
-/** Parsed at UTC noon: a ±12h shift can never land on another calendar date. */
+/**
+ * Parsed at UTC noon: a +/-12h shift can never land on another calendar date.
+ *
+ * Throws on anything malformed. The nullish fallbacks this once used were there
+ * to satisfy noUncheckedIndexedAccess, and they silently invented a date:
+ * parseIsoDate('') gave [0] from the split, filled the rest with 1, and
+ * Date.UTC(0, 0, 1, 12) maps year 0 to 1900 - so an empty date became
+ * 1900-01-01 and every downstream figure looked plausible and was meaningless.
+ * An empty goal date showed "0,0 kg par semaine" and a countdown of J-46304.
+ */
 export function parseIsoDate(d: IsoDate): Date {
-  const [y, m, day] = d.split('-').map(Number);
-  return new Date(Date.UTC(y ?? 0, (m ?? 1) - 1, day ?? 1, 12));
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(d);
+  if (match === null) {
+    throw new Error(`Not an ISO date (expected YYYY-MM-DD): ${JSON.stringify(d)}`);
+  }
+  const [, y, m, day] = match;
+  const date = new Date(Date.UTC(Number(y), Number(m) - 1, Number(day), 12));
+  // The regex only checks shape, so 2026-02-31 would pass it and Date.UTC
+  // would roll it over to 2026-03-03. Round-tripping rejects a date that is
+  // well-formed but not real.
+  if (formatUtcNoonDate(date) !== d) {
+    throw new Error(`Not a real calendar date: ${JSON.stringify(d)}`);
+  }
+  return date;
 }
 
-export function formatIsoDate(dt: Date): IsoDate {
+/** True iff `parseIsoDate` would accept this string. For validating user input. */
+export function isIsoDate(d: string): boolean {
+  try {
+    parseIsoDate(d);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function formatUtcNoonDate(dt: Date): IsoDate {
   return dt.toISOString().slice(0, 10);
 }
 
 export function addDays(d: IsoDate, n: number): IsoDate {
-  return formatIsoDate(new Date(parseIsoDate(d).getTime() + n * DAY_MS));
+  return formatUtcNoonDate(new Date(parseIsoDate(d).getTime() + n * DAY_MS));
 }
 
 export function diffDays(from: IsoDate, to: IsoDate): number {
@@ -421,7 +431,16 @@ export function isoWeekOf(d: IsoDate): IsoWeek {
   dt.setUTCDate(dt.getUTCDate() + 4 - weekdayOf(d));
   const year = dt.getUTCFullYear();
   const jan1 = Date.UTC(year, 0, 1, 12);
-  const week = Math.round((dt.getTime() - jan1) / DAY_MS / 7) + 1;
+  const days = (dt.getTime() - jan1) / DAY_MS;
+  // ceil((days + 1) / 7), NOT round(days / 7) + 1. Let k be the day-of-year
+  // index of the ISO year's first Thursday; the Thursday of week N sits at
+  // k + 7(N-1), so round(days / 7) + 1 yields N + round(k / 7) — correct only
+  // while k <= 3. For k in {4, 5, 6}, i.e. whenever 1 January is a Friday,
+  // Saturday or Sunday (three years in seven), every week came out one too
+  // high and isoWeekOf stopped inverting datesOfIsoWeek. The original draft of
+  // this plan shipped the round form; it survived eleven task reviews because
+  // every fixture here lives in 2026, which begins on a Thursday (k = 3).
+  const week = Math.ceil((days + 1) / 7);
   return `${year}-W${String(week).padStart(2, '0')}`;
 }
 
@@ -431,10 +450,10 @@ export function datesOfIsoWeek(w: IsoWeek): IsoDate[] {
   const week = Number(weekPart);
   // 4 January is always in ISO week 1.
   const jan4 = Date.UTC(year, 0, 4, 12);
-  const jan4Weekday = weekdayOf(formatIsoDate(new Date(jan4)));
+  const jan4Weekday = weekdayOf(formatUtcNoonDate(new Date(jan4)));
   const week1Monday = jan4 - (jan4Weekday - 1) * DAY_MS;
   const monday = week1Monday + (week - 1) * 7 * DAY_MS;
-  return Array.from({ length: 7 }, (_, i) => formatIsoDate(new Date(monday + i * DAY_MS)));
+  return Array.from({ length: 7 }, (_, i) => formatUtcNoonDate(new Date(monday + i * DAY_MS)));
 }
 
 /** The only function in the codebase that turns an instant into a date. */
@@ -488,10 +507,12 @@ describe('rollingAverage', () => {
     expect(rollingAverage(data, '2026-10-06')).toBeCloseTo(62.5, 10);
   });
 
-  it('excludes weigh-ins older than seven days', () => {
+  it('excludes weigh-ins older than the seven-day window', () => {
+    // "Trailing seven calendar days inclusive" means {onDate-6 … onDate}, so a
+    // weigh-in exactly 7 days back is OUTSIDE the window, not on its edge.
     const data = [
-      w('2026-09-28', 70), // 8 days before — outside the window
-      w('2026-09-29', 63), // 7 days before — inside
+      w('2026-09-29', 70),   // 7 days before — outside
+      w('2026-09-30', 63),   // 6 days before — inside
       w('2026-10-05', 62.5),
       w('2026-10-06', 62),
     ];
@@ -628,8 +649,13 @@ describe('weeklyIntermediateGoal', () => {
 });
 
 describe('impliedWeeklyRate', () => {
-  it('reports kg per week so onboarding can show it', () => {
-    expect(impliedWeeklyRate(s)).toBeCloseTo((3.7 / 37) * 7, 10);
+  it('is signed, and negative when the target is below the start', () => {
+    expect(impliedWeeklyRate(s)).toBeCloseTo((-3.7 / 37) * 7, 10);
+    expect(impliedWeeklyRate(s)).toBeLessThan(0);
+  });
+
+  it('is positive when the target is above the start', () => {
+    expect(impliedWeeklyRate({ ...s, targetWeight: 69.7 })).toBeCloseTo((3.7 / 37) * 7, 10);
   });
 
   it('is zero when start and goal coincide', () => {
@@ -750,7 +776,9 @@ git commit -m "feat: add weight trajectory, weekly goal and countdown"
   - `export type BudgetPlan = Pick<WeekPlan, 'noDinnerDays'>`
   - `export type BudgetSettings = Pick<Settings, 'dailyCalorieTarget' | 'noDinnerAllowance' | 'calorieFloor'>`
 
-**Spec note for the implementer:** the user chose the model where the weekly total *falls* on no-dinner days. Each day's allowance is fixed; marking an evening moves the **weekly total**, and the other days stay at `dailyCalorieTarget`. Do not redistribute a surplus — that was the rejected alternative.
+**Spec note for the implementer:** the user chose the model where the weekly total *falls* on no-dinner days.
+
+**Corrected arithmetic note.** An earlier draft of this task expected `weeklyRemaining` to be 1800 and −300 against consumed values of 6900 and 9000. Those came from computing the budget as `7 x 1500 − 2 x 900 = 8700` — subtracting the whole no-dinner allowance twice instead of the 600 difference. The budget is `5 x 1500 + 2 x 900 = 9300`, so the right expectations are 2400, and −300 against a consumed value of 9600 (which preserves that test's intent of an actual overshoot). Prefer symbolic expressions like `5 * 1500 + 2 * 900 - consumed` over hardcoded totals in future tests: the other plans write it that way and are self-checking as a result. Each day's allowance is fixed; marking an evening moves the **weekly total**, and the other days stay at `dailyCalorieTarget`. Do not redistribute a surplus — that was the rejected alternative.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -812,12 +840,15 @@ describe('weeklyBudget', () => {
 });
 
 describe('weeklyRemaining', () => {
+  // The week's budget is 5 x 1500 + 2 x 900 = 9300. Expectations below are
+  // written against that figure; see the note under this task on why an
+  // earlier draft used 8700.
   it('subtracts what was logged', () => {
-    expect(weeklyRemaining('2026-W41', defaultPlan, settings, 6900)).toBe(1800);
+    expect(weeklyRemaining('2026-W41', defaultPlan, settings, 6900)).toBe(2400);
   });
 
   it('goes negative on an overshoot instead of clamping', () => {
-    expect(weeklyRemaining('2026-W41', defaultPlan, settings, 9000)).toBe(-300);
+    expect(weeklyRemaining('2026-W41', defaultPlan, settings, 9600)).toBe(-300);
   });
 });
 
@@ -1857,8 +1888,8 @@ import 'fake-indexeddb/auto';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { db } from '@/db/schema';
 import {
-  getOrCreateDayLog, getOrCreateWeekPlan, listRuns, listWeights,
-  saveRun, saveWeight, softDelete, updateDayLog,
+  getOrCreateDayLog, getOrCreateWeekPlan, listCycles, listRuns, listWeights,
+  saveCycle, saveRun, saveWeight, softDelete, updateDayLog,
 } from '@/db/repos';
 import { DEFAULT_NO_DINNER_DAYS, DEFAULT_RUN_DAYS } from '@/domain/types';
 
@@ -1866,7 +1897,8 @@ beforeEach(async () => {
   await db.open();
   await Promise.all([
     db.dayLogs.clear(), db.weights.clear(), db.runs.clear(),
-    db.weekPlans.clear(), db.outbox.clear(),
+    db.weekPlans.clear(), db.calorieEntries.clear(), db.settings.clear(),
+    db.cycles.clear(), db.outbox.clear(),
   ]);
 });
 
@@ -1943,6 +1975,59 @@ describe('updateDayLog', () => {
     await updateDayLog('u1', '2026-10-06', { ticks: { course: true } });
     const after = await updateDayLog('u1', '2026-10-06', { ticks: { no_dinner: true } });
     expect(after.ticks).toEqual({ course: true, no_dinner: true });
+  });
+
+  it('enqueues exactly one outbox row when the day did not exist yet', async () => {
+    await db.outbox.clear();
+    await updateDayLog('u1', '2026-10-09', { steps: 8000 });
+    // Two rows here would mean the create and the update ran as separate
+    // writes, which is the two-transaction shape this guards against.
+    expect(await db.outbox.count()).toBe(1);
+  });
+
+  it('keeps both ticks when two updates race', async () => {
+    await Promise.all([
+      updateDayLog('u1', '2026-10-10', { ticks: { course: true } }),
+      updateDayLog('u1', '2026-10-10', { ticks: { calories: true } }),
+    ]);
+    const log = await getOrCreateDayLog('u1', '2026-10-10');
+    expect(log.ticks).toEqual({ course: true, calories: true });
+  });
+});
+
+describe('saveCycle', () => {
+  it('stamps closedAt and enqueues one outbox row', async () => {
+    const cycle = await saveCycle('u1', {
+      startDate: '2026-10-06', goalDate: '2026-11-12',
+      startWeight: 66, targetWeight: 62.3, endWeight: 62.5,
+    });
+    expect(cycle.closedAt).not.toBe('');
+    expect(Number.isNaN(Date.parse(cycle.closedAt))).toBe(false);
+    expect(cycle.deletedAt).toBeNull();
+    expect(await db.outbox.count()).toBe(1);
+  });
+
+  it('keeps each closed cycle rather than replacing the previous one', async () => {
+    await saveCycle('u1', {
+      startDate: '2026-10-06', goalDate: '2026-11-12',
+      startWeight: 66, targetWeight: 62.3, endWeight: 62.5,
+    });
+    await saveCycle('u1', {
+      startDate: '2026-11-13', goalDate: '2026-12-24',
+      startWeight: 62.5, targetWeight: 61, endWeight: null,
+    });
+    const cycles = await listCycles('u1');
+    expect(cycles).toHaveLength(2);
+    expect(cycles.map((c) => c.startDate).sort())
+      .toEqual(['2026-10-06', '2026-11-13']);
+  });
+
+  it('accepts a null end weight, for a cycle that was never weighed', async () => {
+    const cycle = await saveCycle('u1', {
+      startDate: '2026-10-06', goalDate: '2026-11-12',
+      startWeight: 66, targetWeight: 62.3, endWeight: null,
+    });
+    expect(cycle.endWeight).toBeNull();
   });
 });
 
@@ -2085,15 +2170,27 @@ export async function updateDayLog(
   date: IsoDate,
   patch: Partial<Omit<DayLog, 'id' | 'userId' | 'date'>>,
 ): Promise<DayLog> {
-  const current = await getOrCreateDayLog(userId, date);
-  const row: DayLog = {
-    ...current,
-    ...patch,
-    // ticks merge rather than replace, so one tap never clears another.
-    ticks: { ...current.ticks, ...(patch.ticks ?? {}) },
-    updatedAt: nowIso(),
-  };
+  let row!: DayLog;
+  // The read and the write share ONE transaction. Reading via
+  // getOrCreateDayLog first would open a second transaction, leaving a window
+  // in which two rapid taps both read the old ticks and the later write
+  // clobbers the earlier tick. It would also enqueue two outbox rows for a
+  // day that did not exist yet: one for the create, one for the update.
   await db.transaction('rw', db.dayLogs, db.outbox, async () => {
+    const existing = await db.dayLogs.where('[userId+date]').equals([userId, date]).first();
+    const base: DayLog = existing ?? {
+      id: newId(), userId, date, ticks: {}, steps: null, waterGlasses: null,
+      jokered: false, validatedAt: null, bonusFiredAt: null,
+      mood: null, energy: null, note: null,
+      updatedAt: nowIso(), deletedAt: null,
+    };
+    row = {
+      ...base,
+      ...patch,
+      // ticks merge rather than replace, so one tap never clears another.
+      ticks: { ...base.ticks, ...(patch.ticks ?? {}) },
+      updatedAt: nowIso(),
+    };
     await db.dayLogs.put(row);
     await enqueue('dayLogs', 'put', row);
   });
@@ -2126,9 +2223,18 @@ export async function updateWeekPlan(
   isoWeek: IsoWeek,
   patch: Partial<Pick<WeekPlan, 'runDays' | 'noDinnerDays' | 'jokerUsedOn'>>,
 ): Promise<WeekPlan> {
-  const current = await getOrCreateWeekPlan(userId, isoWeek);
-  const row: WeekPlan = { ...current, ...patch, updatedAt: nowIso() };
+  let row!: WeekPlan;
+  // One transaction, for the same reasons as updateDayLog above.
   await db.transaction('rw', db.weekPlans, db.outbox, async () => {
+    const existing = await db.weekPlans.where('[userId+isoWeek]').equals([userId, isoWeek]).first();
+    const base: WeekPlan = existing ?? {
+      id: newId(), userId, isoWeek,
+      runDays: [...DEFAULT_RUN_DAYS],
+      noDinnerDays: [...DEFAULT_NO_DINNER_DAYS],
+      jokerUsedOn: null,
+      updatedAt: nowIso(), deletedAt: null,
+    };
+    row = { ...base, ...patch, updatedAt: nowIso() };
     await db.weekPlans.put(row);
     await enqueue('weekPlans', 'put', row);
   });
@@ -2178,7 +2284,7 @@ Expected: PASS.
 
 - [ ] **Step 5: Run the whole suite and commit**
 
-Run: `npm test && npx tsc --noEmit`
+Run: `npm test && npx tsc -b`
 Expected: all tests PASS, no type errors.
 
 ```bash
@@ -2190,8 +2296,8 @@ git commit -m "feat: add repositories that stamp updatedAt and enqueue sync"
 
 ## Plan 1 Done When
 
-- `npm test` passes with coverage of every rule in spec §4.
-- `npx tsc --noEmit` is clean.
+- `npm test` passes with coverage of the spec §4 rules **allocated to this plan**: §4.1 (time), §4.2 (checklist applicability and satisfaction), §4.4 (joker eligibility, less the week-selection the caller resolves — see Plan 2), §4.6 (rolling average and trajectory), §4.7 (budget) and §4.8 (running). **Not** §4.3's validation stamping or §4.5's one-time bonus (Plan 2) or §4.9's cycle summary (Plan 3) — those have no domain home here, and the earlier wording invited a false tick.
+- `npx tsc -b` is clean.
 - `src/domain/` imports nothing from `src/db/`, React, or any date library. Verify: `grep -rE "from '(dexie|react|date-fns)" src/domain/` returns nothing.
 - `src/domain/` and `src/shared/` use no `@/` alias, so `api/` can import them. Verify: `grep -rn "from '@/" src/domain/ src/shared/` returns nothing.
 - Every mutating repo call produces exactly one outbox row.

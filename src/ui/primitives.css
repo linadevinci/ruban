@@ -1,0 +1,58 @@
+.card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-card);
+  overflow: hidden;
+}
+.card__body { padding: 18px; }
+
+.btn {
+  font: inherit;
+  font-weight: 500;
+  border-radius: var(--r-pill);
+  padding: 11px 20px;
+  cursor: pointer;
+  border: 1px solid transparent;
+  /* 44px, iOS's touch-target guideline, reached with a floor rather than with
+     more padding so the pill does not grow sideways. inline-flex because a
+     min-height on a button with static content would otherwise leave the text
+     at the top. */
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.btn:disabled { opacity: 0.5; cursor: default; }
+.btn--solid { background: var(--cerise); color: var(--surface); }
+.btn--quiet { background: none; color: var(--cerise); border-color: var(--line); }
+
+.pill {
+  display: inline-block;
+  font-size: var(--step--1);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  border-radius: var(--r-pill);
+  padding: 3px 11px;
+}
+.pill--rose { background: var(--rose); color: var(--on-rose); }
+.pill--quiet { background: var(--inset); color: var(--ink-soft); border: 1px solid var(--line); }
+
+.stepper { display: flex; align-items: center; gap: 12px; }
+.stepper__btn {
+  /* 44px square, iOS's guideline: this is the water counter, tapped six or
+     more times a day, one-handed. The row it sits in is name-on-the-left,
+     stepper-on-the-right with a 12px gap, so 20px more across the three
+     elements still fits a 320px screen several times over. */
+  width: 44px; height: 44px;
+  display: grid; place-items: center;
+  font: inherit; font-size: var(--step-1); line-height: 1;
+  background: var(--inset); color: var(--ink);
+  border: 1px solid var(--line); border-radius: 50%;
+  cursor: pointer;
+}
+.stepper__btn:disabled { opacity: 0.4; cursor: default; }
+.stepper__value {
+  min-width: 2.5ch; text-align: center;
+  font-family: var(--font-display); font-size: var(--step-2);
+  font-variant-numeric: tabular-nums;
+}
